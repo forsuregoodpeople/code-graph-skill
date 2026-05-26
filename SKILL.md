@@ -6,7 +6,7 @@ description: >
   entry point to final response/output — as an interactive directed graph.
   Use this skill whenever the user shares code and wants to understand flow:
   "trace this request", "where does data go", "what happens after X", "show
-  execution path", "arah data kemana", "trace function ini", "alur request".
+  execution path", "where does data go", "trace this function", "request flow".
   Also trigger for: dependency graphs, module maps, architecture review,
   complexity heatmaps, "review my code", "analyze codebase", "map the flow".
   Supports Cypress and Playwright test files as trace entry points.
@@ -15,102 +15,40 @@ description: >
 
 # Code Graph Skill
 
-Code review, fully visual. Core job: **trace execution flow** — where does a
-request / data / file / function call start, what does it touch, where does it end.
-
-```txt
-INPUT:  code files / folder tree / test files / single function
-OUTPUT: directed flow graph + minimal prose (graph first, always)
-```
+Trace execution flow — where does a request/data/function start, what does it touch, where does it end.
+Graph first, always. Prose is secondary.
 
 ---
 
-## Phase 0 — Build Internal Mental Model  ← runs before EVERY graph
+## Phase 0 — Mental Model (runs before every graph, silent)
 
-Before rendering anything, build a structured internal representation of the code.
-This is what enables tracing to any zoom level — from architecture down to a single expression.
-
-### The Symbol Table
-
-Parse every provided file and extract:
+Build a symbol table from all provided files. Never show it raw — it only drives rendering.
 
 ```txt
-For each FILE:
-  path, language, LOC, imports[], exports[]
-
-For each FUNCTION / METHOD:
-  name, file, line_start, line_end
-  params: [ { name, type? } ]
-  returns: type?
-  calls: [ { target_name, args_shape, line } ]
-  reads: [ variable_name ]       ← variables read from outer scope
-  writes: [ variable_name ]      ← variables assigned / mutated
-  awaits: boolean
-  throws: [ error_type ]
-  side_effects: [ "db.write" | "http.call" | "file.write" | "event.emit" | ... ]
-
-For each VARIABLE / BINDING:
-  name, file, line
-  declared_in: function_name | "module_scope"
-  assigned_from: expression_text   ← right-hand side of assignment
-  type_inferred: string?
-  read_by: [ function_name ]
-  mutated_by: [ function_name ]
-
-For each EXPRESSION (Level C–E, built on demand when user drills):
-  text: string                  ← exact source text, max 120 chars
-  kind: "call" | "access" | "assign" | "await" | "return" | "throw"
-  parent: function_name
-  line: number
-  input_symbols: [ symbol_name ]
-  output_symbol: symbol_name?
-  output_type: string?          ← ~unknown if unclear
-  side_effects: SideEffect[]    ← drives ★ badge at Level C/D/E
-  is_async: boolean             ← drives ⟳ badge at Level C/D/E
+FILE:       path, language, LOC, imports[], exports[]
+FUNCTION:   name, file, line_start/end, params, returns, calls[], reads[], writes[],
+            awaits, throws[], side_effects[]
+VARIABLE:   name, file, line, declared_in, assigned_from, type_inferred, read_by[], mutated_by[]
+EXPRESSION: (Level C–E, built on demand) text, kind, parent, line, input_symbols[],
+            output_symbol, output_type, side_effects[], is_async
 ```
 
-This symbol table is the **mental model**. It is never shown raw to the user —
-it only drives what gets rendered in the graph.
-
-### Zoom Levels
-
+**Zoom levels** — default Level A, user drills deeper on demand:
 ```txt
-Level A  — Function       default start
-           node = function/method block
-           edge = function calls another function
-
-Level B  — Statement      one step deeper
-           node = meaningful statement (assignment, return, throw, if-branch)
-           edge = control flow between statements
-
-Level C  — Expression     one step deeper
-           node = single expression (the call itself, the await itself)
-           edge = data dependency (output of expr → input of next)
-
-Level D  — Variable       one step deeper
-           node = variable / binding
-           edge = assignment ("x gets result of"), read ("y reads x")
-
-Level E  — Property       deepest
-           node = property access / field read (user.role, req.body.email)
-           edge = access chain
+A  Function   node=function/method,      edge=function calls function
+B  Statement  node=meaningful statement, edge=control flow
+C  Expression node=single expression,    edge=data dependency
+D  Variable   node=variable/binding,     edge=assignment / read
+E  Property   node=property access,      edge=access chain
 ```
 
-**Default:** render at Level A. User can say "drill into X" / "zoom ke X" / "lebih detail" to go deeper.
-
-**Level selection in graph UI:**
-Render a zoom control: `[A] [B] [C] [D] [E]` — clicking re-renders selected subgraph at that level.
-Highlight the active level. Only show levels that have extractable data.
-
-### Build Rules
-
+**Build rules:**
 ```txt
-1. Build symbol table FIRST, silently — do not narrate this step to user
-2. If file is partial / truncated → mark affected symbols as [PARTIAL] — do not guess
-3. If type cannot be inferred → use "~unknown" prefix, never fabricate
-4. External library calls → mark as [EXTERNAL] node, do not trace into library internals
-5. Dynamic dispatch (reflection, eval, dynamic require) → mark edge as [DYNAMIC] — dashed
-6. Recursive calls → show as self-loop on node, label with depth limit if known
+- Partial/truncated file → mark symbols [PARTIAL], never guess
+- Unknown type → prefix "~unknown", never fabricate
+- External lib call → [EXTERNAL] node, do not trace into internals
+- Dynamic dispatch → [DYNAMIC] edge, dashed
+- Recursive call → self-loop, label depth limit if known
 ```
 
 ---
@@ -118,683 +56,297 @@ Highlight the active level. Only show levels that have extractable data.
 ## Mode Selection
 
 ```txt
-  User input
-      │
-      ├─ "trace X" / "alur X" / "kemana X" / "flow dari X"
-      │    → TRACE MODE  ← primary mode
-      │    NOTE: if multi-file also present, still use TRACE MODE
-      │          Skip OVERVIEW — go straight to trace from named entry point
-      │
-      ├─ shares multiple files / folder tree  (no trace keyword)
-      │    → OVERVIEW MODE → then offer trace on any node
-      │
-      ├─ Cypress / Playwright test file
-      │    → TEST TRACE MODE → extract entry points → trace each
-      │
-      └─ "review" / "complexity" / "dependencies"
-           → REVIEW MODE (structure + problems)
+"trace X" / "flow of X" / "where does X go"    → TRACE MODE (primary)
+  + multi-file present                           → still TRACE MODE, skip overview
+multiple files / folder tree, no trace keyword  → OVERVIEW MODE → AUTO-PROCEED to full trace
+Cypress / Playwright test file                  → TEST TRACE MODE
+"review" / "complexity" / "dependencies"        → REVIEW MODE
 
-TIEBREAKER RULES (when signals overlap):
-  trace keyword + multi-file         → TRACE MODE wins
-  trace keyword + test file          → TEST TRACE MODE wins (use test as entry)
-  review keyword + trace keyword     → TRACE MODE wins
-  multi-file + no keyword            → OVERVIEW MODE, offer trace at end
-  ambiguous / no clear signal        → OVERVIEW MODE, ask one question: entry point?
+Tiebreakers: trace > review > overview. Ambiguous + zero detectable entry points → ask one question.
 ```
 
 ---
 
-## TRACE MODE  ← Core Feature
+## TRACE MODE
 
-**Goal:** given any starting point, draw the full directed path to the final output.
-Uses the mental model built in Phase 0. Default zoom = Level A. User drills deeper on demand.
+Given any starting point, draw the full directed path to final output. Level A default.
 
-### What counts as a starting point
+**Entry point types:** HTTP route, function call, file operation, event/webhook/cron, variable, expression, test action (`cy.request`, `page.goto`)
+
+**Node types:**
 ```txt
-HTTP Request    → route definition (GET /api/users, POST /login, etc.)
-Function call   → any named function the user points to
-File operation  → read/write/upload trigger
-Event           → click handler, webhook, queue consumer, cron job
-Variable        → trace where this variable comes from and where it goes
-Expression      → trace what this expression produces and who consumes it
-Test action     → cy.request(), page.goto(), cy.visit()
+[ENTRY]      green   — execution start
+[ROUTER]     blue    — route matching / dispatch
+[MIDDLEWARE] amber   — auth, validation, rate limit, logging
+[CONTROLLER] blue    — request handler
+[SERVICE]    blue    — business logic
+[REPOSITORY] blue    — data access
+[DB/STORE]   gold    — database, cache, filesystem
+[EXTERNAL]   gold    — third-party API, queue, email
+[RESPONSE]   green   — final output
+[ERROR]      red     — exception / error response
+[PARTIAL]    dashed border — truncated file symbol
+[DYNAMIC]    dashed edge  — runtime dispatch target unknown
 ```
 
-### Trace Graph Structure
+**Trace rules:**
 ```txt
-Each node = one unit at the current zoom level (function / statement / expression / variable / property)
-Each edge = direction of control or data flow, labeled with what passes through
-
-Node types (apply at any zoom level):
-  [ENTRY]      → where execution begins (green)
-  [ROUTER]     → route matching / middleware dispatch (blue)
-  [MIDDLEWARE] → auth, validation, rate limit, logging (amber)
-  [CONTROLLER] → request handler (blue)
-  [SERVICE]    → business logic (blue)
-  [REPOSITORY] → data access layer (blue)
-  [DB/STORE]   → database, cache, file system (gold)
-  [EXTERNAL]   → third-party API, queue, email service (gold)
-  [RESPONSE]   → final output — HTTP response, return value, file write (green)
-  [ERROR]      → error path — exception thrown, error response (red)
-  [PARTIAL]    → symbol extracted from truncated/incomplete file (dashed border)
-  [DYNAMIC]    → dynamic dispatch — runtime target unknown (dashed edge)
-
-Edge labels:
-  → params / payload    (what data moves)
-  → return value        (what comes back)
-  → error thrown        (when error path diverges)
-  → variable: type      (at Level D/E)
-```
-
-### Trace Graph Rules
-```txt
-1. ALWAYS show both happy path AND error path
-   → happy path = solid edges
-   → error path = dashed red edges
-
-2. Label every edge with what moves through it
-   (e.g., "userId: string", "{ user, token }", "Error: 401")
-
-3. Show WHERE data transforms (shape changes)
-   → node gets ⊕ badge  (NOT ⟳ — ⟳ is async only)
-
-4. Show WHERE side effects happen
-   → node gets ★ badge
-
-5. Conditional branches → show fork explicitly
-   → if (user.role === 'admin') → two edges out, each labeled with condition
-
-6. Async boundaries → ⟳ badge on edge and node
-   → await, Promise, callback, queue
-   → ⟳ = async ONLY. Never use ⟳ for data transform.
-
-7. End node always explicit
-   → res.json() / return value / file written / event emitted
-
-8. Zoom level control always visible in graph UI — TRACE MODE only
-   → [A] [B] [C] [D] [E] — active level highlighted
-   → clicking level re-renders current trace at that depth
-   → only enable levels with extractable data from symbol table
-   → OVERVIEW and REVIEW MODE do not show zoom control
-
-9. "Drill into" on any node → re-render that node expanded at Level+1
-   → rest of graph stays at current level (mixed-level view allowed)
-   → MAX DRILL DEPTH: 2 levels below current active zoom
-     e.g. active = A → can drill to B or C, not D/E directly
-   → "Collapse" button on expanded node → returns to parent zoom level
-```
-
-### Zoom Level Rendering per Level
-
-```txt
-Level A — Function (default)
-  Node label:   functionName()
-  Node tooltip: file path, LOC, params, return type
-  Edge label:   what args pass, what returns
-
-Level B — Statement
-  Node label:   abbreviated statement text (max 40 chars)
-                e.g., "const user = await repo.find()"
-  Node tooltip: full statement, line number
-  Edge label:   variable name that flows out
-
-Level C — Expression
-  Node label:   expression text
-                e.g., "repo.find(email)"
-  Node tooltip: full call signature
-  Edge label:   output type / value
-
-Level D — Variable
-  Node label:   varName: ~type
-  Node tooltip: declared at line X, assigned from Y, read by [...]
-  Edge label:   "assigned from" / "read by" / "mutated by"
-
-Level E — Property
-  Node label:   object.property
-  Node tooltip: access at line X, type inferred: ~T
-  Edge label:   "accessed from" / "passed into"
+1. Happy path always shown — solid edges, top to bottom
+2. Error/warning paths ONLY if anomaly pattern detected (see below)
+3. Every edge labeled with what moves (e.g. "{ email, password }", "User | null", "Error: 401")
+4. Data transform → ⊕ badge on node (never ⟳ — ⟳ is async only)
+5. Side effect → ★ badge on node
+6. Async boundary → ⟳ badge on node and edge (await, Promise, goroutine, callback, queue)
+7. Conditional branch → fork explicitly, label each arm with condition
+8. End node always explicit (res.json / return value / file written / event emitted)
+9. Zoom control [A][B][C][D][E] always visible in graph UI (TRACE MODE only)
+10. "Drill into" any node → expand to Level+1 (max 2 levels below active); "Collapse" to return
 ```
 
 ---
 
-## Graph Renderer vs Target Codebase
+## Anomaly Detection (run before rendering, evidence-based only)
 
+Scan symbol table for patterns. Draw error/warning paths ONLY where a pattern is found.
+No pattern → no annotation. State pattern name explicitly on every flagged edge.
+
+**SECURITY + FATAL → 🔴 error path (╌╌ PATTERN_NAME ╌╌▶)**
 ```txt
-The interactive graph is rendered as a plain HTML artifact (inline SVG + vanilla JS).
-No React, no framework — just HTML, CSS, SVG, and vanilla JS in one file.
+SECURITY:
+  SQL_INJECTION       raw user input into DB query, no parameterize/ORM
+  AUTH_BYPASS         route reachable without required auth middleware
+  EXPOSED_SECRET      API key / token hardcoded or passed to logger
+  UNVALIDATED_INPUT   req.body / args → service/DB with no schema check
+  IDOR                resource fetched by user-supplied ID, no ownership check
 
-The TARGET CODEBASE being analyzed can be anything:
-  Vue, Svelte, Angular, jQuery, vanilla JS/HTML/CSS, Alpine.js, Astro,
-  Laravel, Express, Django, Go, Python, Kotlin, PHP, Ruby — anything.
+FATAL:
+  NIL_DEREF           nullable accessed before nil/null check
+  UNHANDLED_PROMISE   async call, no await AND no .catch() — silent crash
+  MISSING_RETURN      typed function has code path with no return value
+  DEADLOCK_RISK       mutex locked, no guaranteed unlock path / circular goroutine wait
+  INFINITE_LOOP       loop condition cannot become false given data in scope
+```
+
+**WARNING → 🟡 inline annotation (~~▶ ⚠ PATTERN_NAME)**
+```txt
+NULL_UNGUARDED      returns T | null, consumer accesses without guard
+SWALLOWED_ERROR     error caught but not propagated or logged
+MISSING_AWAIT       async called without await, result is Promise<T> not T
+SHAPE_DRIFT         object transformed, downstream still accesses pre-transform fields
+TYPE_MISMATCH       upstream produces type X, downstream expects type Y
+KEY_MISMATCH        publish key and consumer listen key differ (typo / case / prefix)
+UNCLOSED_RESOURCE   DB connection / file handle opened, no close/defer path
 ```
 
 ---
 
-## Architecture Detection for Trace
+## Architecture Detection
 
-Before tracing, detect which architecture pattern AND which framework/stack is used.
-These are two separate detections — architecture shapes the layers, framework shapes the signals.
+Detect architecture pattern AND framework/stack before tracing. Apply labels to nodes automatically.
+Show in graph title: `Trace — NestJS Clean Arch`.
 
-### Backend Architectures
-
+**Backend:**
 ```txt
-MVC (generic)   → Model / View / Controller
-                  signals: controllers/, models/, views/ folders
-                  or: *Controller.*, *Model.* naming
-
-Clean Arch      → Entity / Use Case / Interface / Infrastructure
-                  signals: domain/, application/, infrastructure/ folders
-                  or: *UseCase.ts, *Repository.ts, *Entity.ts naming
-
-Hexagonal       → Core / Port / Adapter
-                  signals: ports/, adapters/, core/ folders
-
-Layered         → Presentation / Business / Data
-                  signals: services/, repositories/, handlers/ folders
-
-Laravel MVC     → Route → Controller → Model → DB
-                  signals: routes/web.php, routes/api.php, app/Http/Controllers/
-                  trace: web.php route → Controller@method → Model::query() → DB
-
-Express / Koa   → Router → Middleware chain → Handler → Response
-                  signals: router.get/post, app.use(), middleware files, req/res params
-                  trace: app.use() → router.METHOD() → handler fn → res.json()
-
-Fastify         → Plugin → Route → Handler → Reply
-                  signals: fastify.register(), fastify.get/post(), reply.send()
-
-NestJS          → Module → Controller → Service → Repository
-                  signals: @Module, @Controller, @Injectable, @InjectRepository
-
-Django          → URL → View → Serializer → Model → DB
-                  signals: urls.py, views.py, serializers.py, models.py
-                  trace: urlpatterns → View.get/post() → Serializer → Model.objects
-
-FastAPI         → Router → Endpoint → Dependency → DB
-                  signals: @app.get/post, Depends(), async def, SQLAlchemy
-
-Go (net/http)   → Mux → Handler → Service → DB
-                  signals: http.HandleFunc, mux.Handle, ServeHTTP
-
-Go (Gin/Echo)   → Engine → Route group → Handler → Response
-                  signals: gin.Default(), r.GET/POST, c.JSON()
-
-Rails           → Route → Controller → Model → DB
-                  signals: routes.rb, *_controller.rb, ApplicationRecord
-
-Spring Boot     → Controller → Service → Repository → DB
-                  signals: @RestController, @Service, @Repository, @Autowired
+Laravel MVC    routes/web.php, routes/api.php, Http/Controllers/  → Route→Controller→Model→DB
+Express/Koa    router.get/post, app.use(), req/res params          → Router→Middleware→Handler→Response
+Fastify        fastify.register(), reply.send()                    → Plugin→Route→Handler→Reply
+NestJS         @Module @Controller @Injectable @InjectRepository   → Module→Controller→Service→Repo
+Django         urls.py, views.py, serializers.py, models.py       → URL→View→Serializer→Model→DB
+FastAPI        @app.get/post, Depends(), async def, SQLAlchemy     → Router→Endpoint→Dependency→DB
+Go net/http    http.HandleFunc, ServeHTTP                          → Mux→Handler→Service→DB
+Go Gin/Echo    gin.Default(), r.GET/POST, c.JSON()                 → Engine→RouteGroup→Handler→Response
+Rails          routes.rb, *_controller.rb, ApplicationRecord       → Route→Controller→Model→DB
+Spring Boot    @RestController @Service @Repository @Autowired     → Controller→Service→Repo→DB
+Generic MVC    controllers/, models/, views/ or *Controller.*      → Model/View/Controller
+Clean Arch     domain/, application/, infrastructure/ or *UseCase  → Entity→UseCase→Interface→Infra
+Hexagonal      ports/, adapters/, core/                            → Core→Port→Adapter
+Layered        services/, repositories/, handlers/                 → Presentation→Business→Data
 ```
 
-### Frontend Architectures
-
+**Frontend:**
 ```txt
-Vanilla JS/HTML/CSS  → DOM ready → Event listener → Handler → DOM mutation
-                        signals: document.addEventListener, querySelector, innerHTML
-                        no framework imports, plain .js + .html + .css files
-                        trace: DOMContentLoaded → addEventListener → fn() → DOM update
-
-jQuery              → DOM ready → .on() handler → AJAX / DOM mutation
-                      signals: $(document).ready / $(fn), $.ajax / $.get / $.post,
-                               .on(), .click(), .val(), .html(), .append()
-                      trace: $(document).ready → $('sel').on('event') → callback → $.ajax → DOM
-
-Vue 2 (Options API) → Component → data/computed/methods → Template → DOM
-                      signals: new Vue(), Vue.component(), export default { data(), methods: {} }
-                      trace: created/mounted → method() → data mutation → re-render
-
-Vue 3 (Composition API) → setup() → ref/reactive → watchEffect → Template
-                           signals: defineComponent, setup(), ref(), reactive(),
-                                    computed(), watch(), onMounted()
-                           trace: setup() → ref() → computed() → template binding → DOM
-
-Nuxt.js             → pages/ → asyncData/fetch → store → component
-                      signals: pages/, layouts/, store/, nuxt.config.js
-                      useAsyncData(), useFetch(), definePageMeta()
-
-Svelte              → Component → reactive declarations → store → DOM
-                      signals: .svelte files, $: reactive, import { writable } from 'svelte/store'
-                      trace: onMount → $: statement → store.update() → reactive DOM
-
-SvelteKit           → +page.svelte → load() → fetch → render
-                      signals: +page.svelte, +page.server.ts, +layout.svelte, load()
-
-Angular             → Module → Component → Service → Template
-                      signals: @NgModule, @Component, @Injectable, @Input/@Output,
-                               ngOnInit(), HttpClient
-
-React (if target)   → Component → useState/useEffect → fetch → re-render
-                      signals: .jsx/.tsx, useState, useEffect, import React
-
-Next.js             → Page/API route → Server component → fetch → Response
-                      signals: pages/api/, app/api/, route.ts, getServerSideProps
-
-Astro               → .astro files → frontmatter → fetch → static HTML
-                      signals: .astro, ---frontmatter---, Astro.props, getStaticPaths()
-
-Alpine.js           → x-data → x-on / x-bind → x-effect → DOM
-                      signals: x-data, x-on:click, x-bind, x-show, x-model, Alpine.data()
-                      trace: x-data init → x-on:event → method() → reactive DOM update
-
-HTMX                → HTML attr → hx-get/post → server response → DOM swap
-                      signals: hx-get, hx-post, hx-trigger, hx-target, hx-swap
-                      trace: user trigger → hx-get request → server HTML → hx-swap into DOM
-
-Vanilla CSS only    → Selector → Property → Computed style → Paint
-                      signals: .css files only, no JS
-                      trace: specificity chain → cascade → computed value → visual output
+Vanilla JS     addEventListener, querySelector — no framework      → DOMReady→EventListener→Handler→DOM
+jQuery         $(fn), .on(), $.ajax                                → DOMReady→.on()→callback→$.ajax→DOM
+Vue 2          new Vue(), export default { data(), methods:{} }    → created/mounted→method→data→render
+Vue 3          setup(), ref(), reactive(), onMounted()             → setup→ref→computed→template→DOM
+Nuxt.js        pages/, useAsyncData(), useFetch()                  → page→asyncData→store→component
+Svelte         .svelte, $: reactive, writable store                → onMount→$:→store.update→DOM
+SvelteKit      +page.svelte, +page.server.ts, load()              → load→fetch→render
+Angular        @NgModule @Component @Injectable, ngOnInit()        → Module→Component→Service→Template
+React          .jsx/.tsx, useState, useEffect                      → Component→state→effect→render
+Next.js        pages/api/, app/api/, route.ts                     → Page/APIRoute→ServerComp→fetch→Response
+Astro          .astro, ---frontmatter---, getStaticPaths()         → frontmatter→fetch→staticHTML
+Alpine.js      x-data, x-on, x-bind, x-model                     → x-data→x-on→method→DOM
+HTMX           hx-get/post, hx-trigger, hx-target, hx-swap       → trigger→hx-request→serverHTML→swap
 ```
 
-### Mobile / Cross-platform
-
+**Mobile:**
 ```txt
-React Native        → Component → state → Native bridge → Native UI
-                      signals: .tsx + react-native imports, StyleSheet, Platform
-                      trace: useState → setState → bridge → native render
-
-Flutter (Dart)      → Widget → build() → setState → re-render
-                      signals: .dart, extends StatefulWidget, setState(), build()
-
-Kotlin Android      → Activity/Fragment → ViewModel → Repository → DB/API
-                      signals: .kt, override fun onCreate, ViewModel, LiveData/Flow
-
-Swift iOS           → ViewController → Model → URLSession → UI update
-                      signals: .swift, viewDidLoad, @IBAction, URLSession.shared
+React Native   .tsx + react-native, StyleSheet                     → Component→state→NativeBridge→UI
+Flutter        .dart, StatefulWidget, setState(), build()          → Widget→build→setState→render
+Kotlin Android .kt, ViewModel, LiveData/Flow                       → Activity→ViewModel→Repository→DB
+Swift iOS      .swift, viewDidLoad, URLSession                     → ViewController→Model→URLSession→UI
 ```
 
-### Unknown / Generic fallback
+**Tiebreaker:** framework-specific signals > generic folder naming > file naming convention > most matches > tied → "Layered (detected)"
 
-```txt
-Unknown             → use folder/file naming heuristics + import patterns
-                      label layers generically: [INPUT] → [PROCESS] → [OUTPUT]
-                      note detected language in graph title
-```
-
-Apply detected architecture labels to trace nodes automatically.
-Show architecture name in graph title: `Trace — Laravel MVC` etc.
-
-**Architecture detection tiebreaker:**
-```txt
-If signals from multiple patterns are present, apply this priority order:
-  1. Framework-specific signals win over generic folder naming
-     (routes/web.php → Laravel MVC beats generic services/ folder)
-  2. More specific pattern wins over generic
-     (Clean Arch beats Layered if domain/ + application/ + infrastructure/ all present)
-  3. File naming convention wins over folder naming alone
-     (*UseCase.ts → Clean Arch even if folders are generic)
-  4. If still ambiguous → pick the pattern with the most matching signals
-     count matches per pattern, use highest score
-  5. If tied → label as "Layered (detected)" and note ambiguity in observation
-```
+**Unknown fallback:** folder/file heuristics + import patterns → label `[INPUT]→[PROCESS]→[OUTPUT]`
 
 ---
 
 ## OVERVIEW MODE
 
-Run when user shares multiple files without a specific trace target.
+Runs when multiple files shared with no trace keyword. Do NOT stop — auto-proceed.
 
-### Step 1 — Inventory
 ```txt
-- File count + language detected
-- Architecture pattern detected (see above)
-- Entry points found (routes, main, index, CLI args, cron, events)
-- External dependencies (package.json, composer.json, go.mod, etc.)
-```
-
-### Step 2 — Architecture Layer Graph
-Render as HTML artifact (inline SVG + vanilla JS):
-- All files as nodes, grouped by detected layer
-- Import/dependency edges between them
-- Node size proportional to LOC
-- Color by layer (use Architecture Layer Color Bands from trace-rendering.md)
-- Nodes clickable → highlight all dependents/dependencies
-- Follow with static ASCII architecture map below the graph
-
-### Step 3 — Problem Detection
-```txt
-[ ] Circular imports
-[ ] God files (>300 LOC)
-[ ] Business logic leaking into wrong layer
-    (e.g., DB query inside Controller, HTTP call inside Model)
-[ ] Missing error boundaries
-[ ] Dead exports (exported but never imported)
-[ ] Deep nesting (>4 levels)
-```
-
-### Step 4 — Offer Trace
-After overview graph, always offer:
-```txt
-"Mau trace alur eksekusi dari titik mana?
-  → [list detected entry points]
-  → atau ketik nama function / route spesifik"
+Step 1 — Inventory: file count, language, architecture, entry points, external deps
+Step 2 — Architecture Layer Graph (HTML artifact: files as nodes by layer, import edges,
+          node size ∝ LOC, clickable highlight; + static ASCII map below)
+Step 3 — Problem Detection:
+          [ ] Circular imports
+          [ ] God files (>300 LOC)
+          [ ] Business logic in wrong layer (DB query in Controller, HTTP call in Model)
+          [ ] Missing error boundaries
+          [ ] Dead exports (exported, never imported)
+          [ ] Deep nesting (>4 levels)
+Step 4 — AUTO-PROCEED to full TRACE MODE:
+          Priority: HTTP route > main()/index > CLI > event consumer > cron > other
+          State entry point chosen: "Continuing trace from: [entry_point] — [reason]"
+          Trace top-to-bottom, all the way to final output. Do NOT stop mid-trace.
+          Show Drill-Down Offer after trace completes (include other entry points as options).
 ```
 
 ---
 
-## TEST TRACE MODE  (Cypress & Playwright)
+## TEST TRACE MODE
 
-When user shares test files with Cypress or Playwright imports:
+Triggered by Cypress / Playwright files (`.cy.js`, `.cy.ts`, `.spec.*`, `.test.*`, `*.e2e.*`).
+
 ```txt
-File extensions recognized:
-  .cy.js  .cy.ts                          ← Cypress
-  .spec.js  .spec.ts                      ← Cypress or Playwright
-  .test.js  .test.ts                      ← Playwright or Vitest/Jest with Playwright
-  *.e2e.js  *.e2e.ts                      ← end-to-end tests (any runner)
+Entry point signals:
+  Cypress:    cy.visit() → GET, cy.request('POST') → POST, cy.intercept() → [MOCK]
+  Playwright: page.goto() → GET, page.request.post() → POST, page.route() → [MOCK]
+
+Node types: [DESCRIBE] [IT/TEST] [ACTION] [ASSERT](purple) [MOCK](dashed) [COVERAGE]
+
+Steps:
+  1. Extract all entry points from test file
+  2. For each: trace which route/handler it hits (if app code provided)
+     If no app code: render test flow only (describe→it→action→assert chain)
+  3. Coverage gap detection (if app code also provided):
+     → show routes/functions with NO test coverage (gray + ⚠️)
+     → overlay coverage on architecture layer graph
+
+Output: HTML artifact — test flow graph + coverage overlay if applicable + ASCII test map below
 ```
-
-### Step 1 — Extract Test Entry Points
-```txt
-Cypress signals:
-  cy.visit('/path')          → HTTP GET entry
-  cy.request('POST', '/api') → HTTP POST entry
-  cy.intercept(...)          → mock boundary (mark as [MOCK] node)
-
-Playwright signals:
-  page.goto('/path')         → HTTP GET entry
-  page.request.post('/api')  → HTTP POST entry
-  page.route(...)            → mock boundary
-```
-
-### Step 2 — Map Test Coverage
-For each entry point found in tests:
-```txt
-- Trace which route/handler it hits (if app code provided)
-- If app code NOT provided: render test flow graph only
-  (describe block → it block → actions → assertions)
-- Mark assertions as [ASSERT] nodes (purple)
-- Mark mocked boundaries as [MOCK] nodes (dashed border)
-```
-
-### Step 3 — Coverage Gap Detection
-```txt
-If both test files AND app code provided:
-  → Show which routes/functions have NO test coverage (gray + ⚠️)
-  → Show which tests cover which layers (overlay on architecture graph)
-```
-
-### Test Flow Graph Node Types
-```txt
-[DESCRIBE]  → test suite container
-[IT/TEST]   → individual test case
-[ACTION]    → user action (click, fill, visit, request)
-[ASSERT]    → expect / should assertion
-[MOCK]      → intercepted / mocked boundary
-[COVERAGE]  → app node that this test reaches
-```
-
-### Output Format
-Render as HTML artifact (inline SVG + vanilla JS):
-- Test flow graph: DESCRIBE → IT blocks → ACTION → ASSERT chain
-- If app code also provided: overlay coverage on architecture layer graph
-- Nodes clickable → show which test file + line triggers this node
-- Follow with static ASCII test flow map below the graph
 
 ---
 
 ## REVIEW MODE
 
-For explicit code quality / dependency review requests.
-
-### Graphs to render
-```txt
-- Dependency Graph   → who imports whom, circular deps highlighted
-- Complexity Heatmap → node size = LOC, color = complexity
-- Problem nodes      → red for issues, gray for dead code
-```
-
-### Output Format
-Render as HTML artifact (inline SVG + vanilla JS):
-- No zoom control (REVIEW MODE does not use zoom levels)
-- Nodes clickable → highlight dependents/dependencies
-- Problem nodes rendered in red, dead code in gray
-- Complexity heatmap: green (simple) → yellow (medium) → red (complex)
-- Follow with static ASCII dependency map below the graph
-
-Problem detection same as OVERVIEW MODE Step 3.
-
----
-
-## Output Format Rules
+Triggered by "review" / "complexity" / "dependencies". No zoom levels.
 
 ```txt
-1. GRAPH FIRST — always render diagram before any prose
-
-2. HTML artifact for interactive graphs
-   → plain HTML + inline SVG + vanilla JS — no framework
-   → nodes clickable → highlight connected path
-   → hover tooltip → show: file path, LOC, function signature, layer
-   → "Trace from here" button on every node → re-render trace from that node
-   → zoom control [A][B][C][D][E] always visible in graph UI (TRACE MODE only)
-   → ASCII flowchart panel BELOW the interactive graph, synced to active zoom level
-
-3. ASCII-only output when:
-   → user is in a terminal / plain text context
-   → graph has ≤8 nodes (ASCII alone is sufficient)
-   → user explicitly asks for ASCII only
-
-4. Color coding (consistent per session):
-   Entry/Response  = #3aaa8c  (Palm Green)
-   Internal node   = #668db8  (Miracloud Blue)
-   External/DB     = #F0A500  (Mango Gold)
-   Error path      = #e05252  (Red)
-   Dead/Mock       = #888888  (Gray)
-   Middleware      = #c49a3c  (Amber)
-   Assert (tests)  = #9b59b6  (Purple)
-
-5. Always show legend
-6. Edge labels always visible (not just on hover) for flow graphs
+Graphs: Dependency graph (circular deps highlighted) + Complexity heatmap (size=LOC, color=complexity)
+Problems: same checklist as OVERVIEW Step 3
+Output: HTML artifact, nodes clickable, problem nodes red, dead code gray,
+        heatmap green→yellow→red; + static ASCII dependency map below
 ```
 
 ---
 
-## ASCII Flowchart — Mandatory Companion Output
-
-Every trace graph ships with an ASCII flowchart. It is not optional.
-The ASCII version is the portable, copy-pasteable, terminal-friendly form of the same graph.
-
-### When to render
+## Output Format
 
 ```txt
-HTML interactive graph    → ASCII panel embedded below graph, syncs with zoom level
-ASCII-only response       → ASCII block as main output (no HTML artifact)
-Any TRACE MODE response   → always, at every zoom level
-OVERVIEW MODE             → architecture ASCII after the overview graph
-TEST TRACE MODE           → test flow ASCII after the coverage graph
+1. Graph first, always — before any prose
+2. HTML artifact: plain HTML + inline SVG + vanilla JS (no framework)
+   - Nodes clickable → highlight connected path
+   - Hover tooltip → file path, LOC, function signature, layer
+   - "Trace from here" button on every node
+   - Zoom control [A][B][C][D][E] visible (TRACE MODE only)
+   - ASCII panel below, synced to active zoom level
+3. ASCII-only when: terminal/plain-text context, ≤8 nodes, or user asks
+4. Colors (consistent per session):
+   Entry/Response #3aaa8c  Internal #668db8  External/DB #F0A500
+   Error #e05252  Dead/Mock #888888  Middleware #c49a3c  Assert #9b59b6
+5. Legend always shown. Edge labels always visible (not hover-only).
 ```
 
-### ASCII Symbols (use consistently)
+---
 
+## ASCII Flowchart (mandatory with every trace)
+
+Portable, copy-pasteable companion to the interactive graph. Not optional.
+
+**Symbols:**
 ```txt
-Flow direction:
-  │   vertical flow (top-down)
-  ▼   downward arrow
-  ▶   rightward arrow (error paths, side branches)
-  ─   horizontal connector
-  ┌ ┐ └ ┘   box corners
-  ├ ┤ ┬ ┴ ┼  box junctions
-
-Paths:
-  ───   happy path (solid)
-  ╌╌╌   error / exception path (dashed)
-  ─ ─   return / response path (spaced dashes)
-
-Badges (inline, after node label):
-  ★   side effect (db write, http call, file write, event emit)
-  ⟳   async boundary (await, Promise, goroutine, coroutine)
-  ?   conditional branch (if/switch that forks execution)
-  ⊕   data transform (shape of data changes here)
-
-Edge labels:
-  written inline between nodes, e.g.:
-  │ { email, password }
-  ▼
-  or on the same line as the connector:
-  ╌╌ Error: 401 ╌╌╌╌╌╌╌╌╌╌╌╌╌╌▶ [ERROR node]
+Direction:  │ ▼ ▶ ─ ┌┐└┘ ├┤┬┴┼
+Paths:      ───  happy path     ╌╌╌  SECURITY/FATAL error (+ pattern name)
+            ~~~  WARNING         ─ ─  return / response
+Badges:     ★ side-effect  ⟳ async  ? branch  ⊕ transform  ⚠ warning anomaly
+Edge label: inline between nodes  e.g. │ { email, password }  or  ╌╌ NIL_DEREF ╌╌▶
 ```
 
-### ASCII Structure per Zoom Level
-
-**Level A — Function**
+**Structure (Level A):**
 ```
 [ENTRY: trigger]
-      │
-      ▼ { edge label }
-┌─────────────────────┐
-│  FunctionName()     │ [badges]
-└──────────┬──────────┘
-           │                   ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌▶ [ERROR: type status]
-           ▼ { return label }
-┌─────────────────────┐
-│  NextFunction()     │ [badges]
-└──────────┬──────────┘
+        │
+        ▼ { edge label }
+┌───────────────────────┐
+│  FunctionName()       │ [badges]
+└──────────┬────────────┘
+           │              ╌╌ PATTERN ╌╌╌╌╌╌╌╌╌▶ [ERROR: description]
+           ▼ { return }   ~~ PATTERN ~~~~~~~~~~▶ ⚠ warning annotation
+┌───────────────────────┐
+│  NextFunction()       │ [badges]
+└──────────┬────────────┘
            ▼
      [RESPONSE: final output]
+Legend: ─── happy path  ╌╌╌ security/fatal  ~~~ warning  ─ ─ return  ★ side-effect  ⟳ async  ⊕ transform  ⚠ anomaly
 ```
 
-**Level B — Statement**
-```
-FunctionName() — statements
-  ┌──────────────────────────────────────┐
-  │ const x = await repo.find(param) ⟳  │
-  └──────────────┬───────────────────────┘
-                 │ x: Type|null
-                 ▼
-  ┌──────────────────────────────────────┐
-  │ if (!x)                          ?  │
-  └──────┬──────────────────┬───────────┘
-         │ x !== null        │ x === null
-         ▼                   ▼
-  ┌────────────┐     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
-  │ next step  │     throw Error(code)
-  └────────────┘     ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
-```
-
-**Level C — Expression**
-```
-expr1(args)
-      │ return: Type
-      ▼
-expr2(result_of_expr1)
-      │ return: Type2
-      ▼
-expr3->prop
-      │ return: FinalType
-      ▼
-[final value]
-```
-
-**Level D — Variable**
-```
-◇ varA: Type ──────────────────────┐
-                                    │ passed into
-◇ varB: Type ──────────────────┐   ▼
-                                │  someFunction()
-◇ result: ReturnType ◀─────────┘
-    │ read_by: [fn1, fn2]
-    │ mutated_by: none
-    ▼
-[next consumer]
-```
-
-**Level E — Property**
-```
-$obj
-  └─.method(args)
-       │ returns ComplexType
-       └─.property
-            │ returns string
-            └─ [final value — passed into X]
-```
-
-### ASCII Rules
-
+**ASCII rules:**
 ```txt
-1. Box width: align all boxes in same column to same width
-   → find longest label in column, pad others with spaces
-
-2. Error paths always on the RIGHT side of the column
-   → main flow: center column
-   → errors: branch right with ╌╌╌╌╌╌╌╌╌╌╌▶
-
-3. Return paths (dashed, going UP or sideways):
-   → use ─ ─ ─ with label inline
-   → or vertical return: line on right side of column going up
-
-4. Conditional fork: show BOTH branches explicitly
-   → label each branch arm with the condition
-   → rejoin below if branches converge, or terminate separately
-
-5. Side effects: show as indented branch off main flow
-   → ├─ ★ sideEffect() ─▶ [EXTERNAL node]
-
-6. Legend always at bottom of ASCII block:
-   ─── happy path    ╌╌╌ error path    ─ ─ return value
-   ★ side effect    ⟳ async    ? branch    ◇ variable
+- All boxes in same column → same width (pad with spaces)
+- Error/warning paths → RIGHT side with ╌╌▶ / ~~▶ + pattern name
+- Conditional fork → BOTH arms labeled with condition; rejoin or terminate separately
+- Side effects → ├─ ★ sideEffect() ─▶ [EXTERNAL]
+- Return paths → ─ ─ ─ label inline
+- Legend always at bottom
+- Syncs to active zoom level in interactive graph (TRACE MODE only)
 ```
-
-### Zoom Sync in Interactive Graph
-
-When the HTML graph has zoom controls [A][B][C][D][E] (TRACE MODE only):
-- The ASCII panel below the graph **updates when zoom level changes**
-- Each zoom level has its own pre-rendered ASCII string
-- ASCII is shown in a monospace code block with scroll if long
-- Label above ASCII panel: `ASCII Flowchart — Level [X]`
-- OVERVIEW and REVIEW MODE: render one static ASCII block, no zoom sync
 
 ---
 
 ## Observation Format (below graph)
 
 ```txt
-✅ [Strong point]       → max 2 points
-⚠️  [Worth watching]    → max 3 points
-🔴 [Needs attention]    → one line per problem node
+✅ [Strong point]                    max 2
+⚠️  [Warning — PATTERN_NAME: detail]  one per WARNING found, max 3
+🔴 [Security/Fatal — PATTERN_NAME]   one per SECURITY/FATAL found
 ```
-
-Max 4 bullets total. No paragraphs.
+Max 6 bullets. No paragraphs. Zero anomalies → omit 🔴/⚠️ entirely.
 
 ---
 
 ## Drill-Down Offer (end of every response)
 
-Tailor options to the active mode — do not show irrelevant options.
-
 ```txt
-TRACE MODE:
-  "Mau lanjut ke mana?
-    A) Zoom ke Level B — lihat per statement di [current node]
-    B) Lihat error path dari [problem node]
-    C) Trace entry point lain: [list other detected entry points]
-    D) Switch ke REVIEW MODE — analisa struktur & complexity"
+TRACE:    A) Zoom Level B — per statement in [node]
+          B) Error/warning detail at [flagged node]
+          C) Trace another entry point: [list]
+          D) Switch to REVIEW MODE
 
-OVERVIEW MODE:
-  "Mau lanjut ke mana?
-    A) Trace alur dari [detected entry point 1]
-    B) Trace alur dari [detected entry point 2]
-    C) Zoom ke subsystem [problem layer]
-    D) Lihat dependency graph detail"
+OVERVIEW: A) Trace flow from [entry point 1]   C) Zoom into subsystem [layer]
+          B) Trace flow from [entry point 2]   D) View dependency graph detail
 
-TEST TRACE MODE:
-  "Mau lanjut ke mana?
-    A) Trace app code yang di-hit oleh [test name]
-    B) Lihat coverage gap — route/function tanpa test
-    C) Drill ke mock boundary [MOCK node]"
+TEST:     A) Trace app code hit by [test]
+          B) Coverage gaps — untested routes/functions
+          C) Drill into mock boundary [MOCK]
 
-REVIEW MODE:
-  "Mau lanjut ke mana?
-    A) Trace alur dari [detected entry point]
-    B) Detail problem node: [list red nodes]
-    C) Lihat circular dependency chain"
-```
-
----
-
-## References
-
-```txt
-problem-patterns.md        Anti-pattern catalog per language/framework
-trace-rendering.md         Happy/error path rules, edge labels, async chains, Cypress/Playwright
-mental-model.md            Symbol table schema, zoom level rendering detail, partial file handling
+REVIEW:   A) Trace flow from [entry point]
+          B) Detail problem node: [list]
+          C) View circular dependency chain
 ```
 
 ---
@@ -802,32 +354,14 @@ mental-model.md            Symbol table schema, zoom level rendering detail, par
 ## Quick Checklist
 
 ```txt
-PHASE 0 — Mental Model
-[ ] Symbol table built from all provided files?
-[ ] Partial/truncated symbols marked [PARTIAL]?
-[ ] External libs marked [EXTERNAL], not traced into?
-[ ] Dynamic dispatch marked [DYNAMIC] with dashed edge?
-
-GRAPH OUTPUT
-[ ] Mode selected (TRACE / OVERVIEW / TEST TRACE / REVIEW)?
-[ ] Architecture detected and labeled?
-[ ] Graph rendered first?
-[ ] Zoom level control [A][B][C][D][E] visible in graph UI? (TRACE MODE only — not OVERVIEW/REVIEW)
-[ ] Default zoom = Level A unless user specified otherwise?
-[ ] Both happy path AND error path shown (TRACE mode)?
-[ ] Edge labels show what data moves?
-[ ] Side effects marked ★, transforms marked ⊕, async marked ⟳?
-[ ] Legend present?
-[ ] Drill-down offer at end?
-[ ] Max 4 prose bullets?
-
-ASCII FLOWCHART
-[ ] ASCII flowchart present for every trace response?
-[ ] ASCII synced to active zoom level (all 5 levels pre-rendered)?
-[ ] Error paths on RIGHT with ╌╌╌╌▶?
-[ ] Happy path center column with │ ▼ ┌─┐?
-[ ] Conditional forks show BOTH arms labeled?
-[ ] Side effects as ├─ ★ branch?
-[ ] Legend at bottom of ASCII block?
-[ ] Box widths aligned within same column?
+MENTAL MODEL       symbol table built? partials marked? externals marked? dynamic edges dashed?
+ANOMALY DETECTION  all 3 phases scanned? error paths only where pattern found? pattern named on edge?
+MODE               correct mode selected? architecture detected and labeled?
+GRAPH              graph rendered first? zoom control visible (TRACE only)? happy path solid top-to-bottom?
+                   badges ★⟳⊕⚠ correct? edge labels present? legend shown?
+                   OVERVIEW: auto-proceeded without stopping? entry point stated?
+ASCII              present for every trace? error RIGHT with ╌╌▶+pattern? warning RIGHT with ~~▶+pattern?
+                   happy path center │▼┌─┐? forks both arms labeled? side-effects as ├─★? legend at bottom?
+OBSERVATIONS       ✅ max 2, ⚠️ max 3, 🔴 per pattern. zero anomalies → omit 🔴/⚠️.
+DRILL-DOWN         offer at end, tailored to active mode?
 ```
