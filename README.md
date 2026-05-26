@@ -4,14 +4,19 @@ Skill untuk review codebase secara visual dengan tracing alur eksekusi, data flo
 
 ## Install
 
+`npx skill` hanya menerima paket dari `vercel-labs/agent-skills`. Untuk repo ini, install dengan clone/copy ke folder skills agent yang dipakai.
+
+Untuk opencode:
+
 ```bash
-npx skill install forsuregoodpeople/code-graph-skill
+git clone git@github.com:forsuregoodpeople/code-graph-skill.git ~/.config/opencode/skills/code-graph
 ```
 
 Atau dari folder lokal:
 
 ```bash
-npx skill install .
+mkdir -p ~/.config/opencode/skills/code-graph
+cp -R ./* ~/.config/opencode/skills/code-graph/
 ```
 
 ## Usage
