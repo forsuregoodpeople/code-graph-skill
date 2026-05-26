@@ -15,7 +15,7 @@ description: >
 
 # Code Graph Skill
 
-Trace execution flow — where does a request/data/function start, what does it touch, where does it end.
+Trace execution flow end-to-end — where does a request/data/function start, what does it touch, where does it end.
 Graph first, always. Prose is secondary.
 
 ---
@@ -57,12 +57,12 @@ E  Property   node=property access,      edge=access chain
 
 ```txt
 "trace X" / "flow of X" / "where does X go"    → TRACE MODE (primary)
-  + multi-file present                           → still TRACE MODE, skip overview
-multiple files / folder tree, no trace keyword  → OVERVIEW MODE → AUTO-PROCEED to full trace
+  + multi-file present                           → still TRACE MODE
+multiple files / folder tree, no trace keyword  → TRACE MODE (deep scan)
 Cypress / Playwright test file                  → TEST TRACE MODE
 "review" / "complexity" / "dependencies"        → REVIEW MODE
 
-Tiebreakers: trace > review > overview. Ambiguous + zero detectable entry points → ask one question.
+Tiebreakers: trace > review. Ambiguous + zero detectable entry points → ask one question.
 ```
 
 ---
@@ -102,6 +102,58 @@ Given any starting point, draw the full directed path to final output. Level A d
 9. Zoom control [A][B][C][D][E] always visible in graph UI (TRACE MODE only)
 10. "Drill into" any node → expand to Level+1 (max 2 levels below active); "Collapse" to return
 ```
+
+**End-to-end scan contract:**
+```txt
+Never stop at the first handler, controller, service, or repository.
+Trace reachable execution from the chosen entry point until every branch reaches a terminal node:
+  - [RESPONSE] HTTP response / rendered view / redirect / thrown error handled as response
+  - [DB/STORE] final file/cache/database write when the write is the output
+  - [EXTERNAL] emitted job/event/webhook/email when that emission is the output
+  - [RETURN] final function return when no higher-level caller is provided
+
+Traversal order:
+  1. Start at the topmost user-visible entry point: route/test action/main/CLI/event/file watcher.
+  2. Follow middleware/guards/validators before handler logic.
+  3. Follow every in-repo function/method call, constructor call, repository call, model method, and helper call.
+  4. Follow data shape changes through request DTOs, serializers/resources, mappers, response builders, and error formatters.
+  5. Follow side effects to DB/cache/files/queues/emails/webhooks; external internals stay [EXTERNAL].
+  6. For conditional branches, trace both arms if both are reachable from provided code.
+  7. For loops, summarize one iteration and show exit condition.
+  8. For recursion, draw a self-loop and state the base/stop condition if visible.
+
+If a call target is missing from provided code, create a [PARTIAL] or [EXTERNAL] terminal and continue tracing all other known branches.
+If multiple primary entry points exist, deep scan the highest-priority entry point first, then list the rest in Drill-Down.
+```
+
+**Deep scan default for multi-file input:**
+```txt
+Step 1 — Silent inventory (never output to user):
+          detect language, architecture, ALL entry points, external deps, terminal outputs
+
+Step 2 — IMMEDIATELY execute full TRACE MODE:
+          Priority: HTTP route > main()/index > CLI > event consumer > cron > other
+          One-line header only: "Tracing [entry_point] — [architecture detected]"
+          Then trace top-to-bottom ALL THE WAY to every reachable final output:
+            - every middleware, service, repository, DB call
+            - every in-repo helper/model/resource/serializer touched by the path
+            - every reachable branch until terminal node
+            - anomaly detection active throughout
+            - error/warning paths where patterns found
+            - do NOT stop mid-trace
+            - do NOT summarize with "continues to..." if code is available
+            - do NOT render architecture graph first
+            - do NOT ask which entry point — pick the most primary one
+
+Step 3 — After full trace, run problem detection INLINE as observations:
+          [ ] Circular imports         [ ] God files (>300 LOC)
+          [ ] Business logic in wrong layer  [ ] Missing error boundaries
+          [ ] Dead exports             [ ] Deep nesting (>4 levels)
+
+Step 4 — Drill-Down Offer listing ALL other detected entry points as trace options.
+```
+
+**Architecture graph is OPTIONAL — only render if user explicitly asks for it.**
 
 ---
 
@@ -194,30 +246,6 @@ Swift iOS      .swift, viewDidLoad, URLSession                     → ViewContr
 
 ---
 
-## OVERVIEW MODE
-
-Runs when multiple files shared with no trace keyword. Do NOT stop — auto-proceed.
-
-```txt
-Step 1 — Inventory: file count, language, architecture, entry points, external deps
-Step 2 — Architecture Layer Graph (HTML artifact: files as nodes by layer, import edges,
-          node size ∝ LOC, clickable highlight; + static ASCII map below)
-Step 3 — Problem Detection:
-          [ ] Circular imports
-          [ ] God files (>300 LOC)
-          [ ] Business logic in wrong layer (DB query in Controller, HTTP call in Model)
-          [ ] Missing error boundaries
-          [ ] Dead exports (exported, never imported)
-          [ ] Deep nesting (>4 levels)
-Step 4 — AUTO-PROCEED to full TRACE MODE:
-          Priority: HTTP route > main()/index > CLI > event consumer > cron > other
-          State entry point chosen: "Continuing trace from: [entry_point] — [reason]"
-          Trace top-to-bottom, all the way to final output. Do NOT stop mid-trace.
-          Show Drill-Down Offer after trace completes (include other entry points as options).
-```
-
----
-
 ## TEST TRACE MODE
 
 Triggered by Cypress / Playwright files (`.cy.js`, `.cy.ts`, `.spec.*`, `.test.*`, `*.e2e.*`).
@@ -248,7 +276,7 @@ Triggered by "review" / "complexity" / "dependencies". No zoom levels.
 
 ```txt
 Graphs: Dependency graph (circular deps highlighted) + Complexity heatmap (size=LOC, color=complexity)
-Problems: same checklist as OVERVIEW Step 3
+Problems: same checklist as TRACE MODE deep scan Step 3
 Output: HTML artifact, nodes clickable, problem nodes red, dead code gray,
         heatmap green→yellow→red; + static ASCII dependency map below
 ```
@@ -337,9 +365,6 @@ TRACE:    A) Zoom Level B — per statement in [node]
           C) Trace another entry point: [list]
           D) Switch to REVIEW MODE
 
-OVERVIEW: A) Trace flow from [entry point 1]   C) Zoom into subsystem [layer]
-          B) Trace flow from [entry point 2]   D) View dependency graph detail
-
 TEST:     A) Trace app code hit by [test]
           B) Coverage gaps — untested routes/functions
           C) Drill into mock boundary [MOCK]
@@ -359,7 +384,7 @@ ANOMALY DETECTION  all 3 phases scanned? error paths only where pattern found? p
 MODE               correct mode selected? architecture detected and labeled?
 GRAPH              graph rendered first? zoom control visible (TRACE only)? happy path solid top-to-bottom?
                    badges ★⟳⊕⚠ correct? edge labels present? legend shown?
-                   OVERVIEW: auto-proceeded without stopping? entry point stated?
+                   deep scan: silent inventory? immediate trace? entry point stated in one line?
 ASCII              present for every trace? error RIGHT with ╌╌▶+pattern? warning RIGHT with ~~▶+pattern?
                    happy path center │▼┌─┐? forks both arms labeled? side-effects as ├─★? legend at bottom?
 OBSERVATIONS       ✅ max 2, ⚠️ max 3, 🔴 per pattern. zero anomalies → omit 🔴/⚠️.

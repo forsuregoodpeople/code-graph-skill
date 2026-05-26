@@ -122,12 +122,12 @@ The skill auto-detects user intent and selects the right mode:
 | Intent | Mode | Action |
 |--------|------|--------|
 | Trace a request/function/data path | **Trace** | Render directed execution/data-flow graph |
-| Shared multiple files or folder tree | **Overview** | Map modules, then offer traceable entry points |
+| Shared multiple files or folder tree | **Trace** | Silently pick the primary entry point and deep scan end-to-end |
 | Cypress or Playwright test file | **Test Trace** | Extract test actions and trace each path |
 | Review/complexity/dependencies | **Review** | Show architecture graph and structural risks |
-| Ambiguous input | **Overview + question** | Map visible structure and ask for entry point |
+| Ambiguous input | **Trace or question** | Trace the primary detectable entry point; ask only if no entry point is detectable |
 
-Core rule: **If the user asks for flow, trace mode wins. Always show a visual graph first.**
+Core rule: **Trace mode wins. Always show a visual graph first. Trace top-to-bottom until every reachable branch reaches a terminal output.**
 
 ## Zoom levels
 
@@ -140,6 +140,10 @@ Core rule: **If the user asks for flow, trace mode wins. Always show a visual gr
 | E | Property | Field access chains like `req.body.email` |
 
 Default starts at **Level A**. The user can ask to "drill into X", "zoom ke X", or "lebih detail" to move deeper.
+
+## Deep scan contract
+
+Trace does not stop at the first handler/controller/service. It follows every reachable in-repo call from the selected entry point through middleware, validators, services, repositories, models, helpers, serializers/resources, side effects, and response builders until each branch reaches a terminal node: response, return, DB/file/cache write, emitted event/job/webhook/email, handled error response, `[PARTIAL]`, or `[EXTERNAL]`.
 
 ## Graph conventions
 
@@ -188,7 +192,7 @@ Badges:
 - **Never guess missing code; mark partial or unknown.**
 - **External library calls are `[EXTERNAL]`, not traced internally.**
 - **Use dashed edges for dynamic dispatch and error paths.**
-- **If flow is requested, skip overview and trace from the named entry point.**
+- **If flow is requested, trace from the named entry point.**
 
 ## License
 
