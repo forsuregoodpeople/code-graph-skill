@@ -1,347 +1,267 @@
 ---
 name: code-graph
 description: >
-  Full codebase review through visual execution tracing and flow analysis.
-  Core capability: trace where data/requests/files/function calls GO — from
-  entry point to final response/output — as an interactive directed graph.
-  Use this skill whenever the user shares code and wants to understand flow:
-  "trace this request", "where does data go", "what happens after X", "show
-  execution path", "where does data go", "trace this function", "request flow".
-  Also trigger for: dependency graphs, module maps, architecture review,
-  complexity heatmaps, "review my code", "analyze codebase", "map the flow".
-  Supports Cypress and Playwright test files as trace entry points.
-  Always output a visual graph first. Never explain structure in prose alone.
+  Visual codebase review and structural analysis. Follows the edges -- every call,
+  data pass, and import -- from each entry point to cover all connected, reachable
+  code in one pass (nothing skipped, dead code flagged). Produces a reachability/edge
+  graph, dependency graphs, module/architecture maps, complexity heatmaps, and
+  structural problem detection (circular deps, god files, dead code, misplaced logic,
+  missing error boundaries) as ASCII-only directed graphs. Use this skill whenever
+  the user shares code, a file, or a folder and wants to understand or review
+  its structure end-to-end: "review my code", "analyze codebase", "show dependencies",
+  "map the modules", "where is the complexity", "find structural problems", "what
+  touches this", "end-to-end analysis", "is this well organized", "architecture
+  review", "dependency graph", "complexity heatmap". Always output an ASCII graph first.
+  Never explain structure in prose alone.
 ---
 
 # Code Graph Skill
 
-Trace execution flow end-to-end — where does a request/data/function start, what does it touch, where does it end.
-Graph first, always. Prose is secondary.
+Review codebase structure visually -- dependencies, layering, complexity, and structural problems.
+Graph first, always. Prose is secondary. There is one mode: REVIEW. No execution tracing, no zoom levels.
+
+## Operating principle -- total, in one command
+
+One command = one complete review. Deliver the FULL analysis in this single response:
+every file, every entry point, every reachable node, every edge, all problems -- done.
+No staging, no "phase 1 of N", no "want me to continue?", no waiting for a second prompt,
+no drill-down menu. The user should never have to ask twice to get the whole picture.
+
+If the codebase is genuinely too large to fit one response, do NOT silently truncate or defer.
+Cover as much as possible, then state plainly and specifically what was not covered and why
+(e.g. "files X, Y not analyzed -- exceeded response limit"). Honesty about a hard limit is allowed;
+a voluntary partial answer with an offer to continue is not.
+
+> **IMPORTANT -- trace 100% end to end.**
+> Follow every edge from each entry point all the way to its terminal (response / return /
+> DB-file-cache write / emitted event-job-webhook-email / handled error). Do not stop at the
+> first handler, service, or repository. Every reachable node -- every function, method, helper,
+> mapper, serializer, branch, and side effect that the provided code can hit -- MUST appear and be
+> analyzed. Both arms of every reachable branch. One iteration plus exit for loops. Self-loop plus
+> base case for recursion. 100% means zero "continues to ...", zero summarized branches whose code
+> was provided, zero skipped paths. The only nodes allowed to be incomplete are [PARTIAL] (code not
+> provided) and [EXTERNAL] (third-party internals). An incomplete trace is worse than none: it hides
+> the exact edge where the bug lives and gives false confidence that the path was checked.
 
 ---
 
-## Phase 0 — Mental Model (runs before every graph, silent)
+## Phase 0 -- Mental Model (runs before every graph, silent)
 
-Build a symbol table from all provided files. Never show it raw — it only drives rendering.
+Build a symbol table from all provided files. Never show it raw -- it only drives rendering.
 
 ```txt
 FILE:       path, language, LOC, imports[], exports[]
 FUNCTION:   name, file, line_start/end, params, returns, calls[], reads[], writes[],
-            awaits, throws[], side_effects[]
+            side_effects[], throws[]
 VARIABLE:   name, file, line, declared_in, assigned_from, type_inferred, read_by[], mutated_by[]
-EXPRESSION: (Level C–E, built on demand) text, kind, parent, line, input_symbols[],
-            output_symbol, output_type, side_effects[], is_async
-```
-
-**Zoom levels** — default Level A, user drills deeper on demand:
-```txt
-A  Function   node=function/method,      edge=function calls function
-B  Statement  node=meaningful statement, edge=control flow
-C  Expression node=single expression,    edge=data dependency
-D  Variable   node=variable/binding,     edge=assignment / read
-E  Property   node=property access,      edge=access chain
 ```
 
 **Build rules:**
 ```txt
-- Partial/truncated file → mark symbols [PARTIAL], never guess
-- Unknown type → prefix "~unknown", never fabricate
-- External lib call → [EXTERNAL] node, do not trace into internals
-- Dynamic dispatch → [DYNAMIC] edge, dashed
-- Recursive call → self-loop, label depth limit if known
+- Partial/truncated file -> mark symbols [PARTIAL], never guess
+- Unknown type -> prefix "~unknown", never fabricate
+- External lib -> [EXTERNAL] node, do not inspect internals
+- Dynamic dispatch -> [DYNAMIC] edge, dashed
+- Recursive call -> self-loop, label depth limit if known
 ```
 
 ---
 
-## Mode Selection
+## REVIEW MODE (the only mode)
 
+Always review. Given any code, file, or folder, render the structure as graphs -- never as prose first.
+
+**Produce, in this order:**
 ```txt
-"trace X" / "flow of X" / "where does X go"    → TRACE MODE (primary)
-  + multi-file present                           → still TRACE MODE
-multiple files / folder tree, no trace keyword  → TRACE MODE (deep scan)
-Cypress / Playwright test file                  → TEST TRACE MODE
-"review" / "complexity" / "dependencies"        → REVIEW MODE
+1. Reachability / edge graph -- follow the edges, hit everything connected.
+   Nodes = functions/methods (and the files that hold them). Edges = calls, data passes,
+   imports, and side-effect writes (DB/file/queue/event). Label each edge with what moves
+   across it (params, return type, payload), e.g. "{ email, password }", "User | null".
+   From every entry point, walk EVERY in-repo edge to every connected node:
+     handler -> middleware/guard -> service -> repository -> model -> DB/store -> response,
+     plus every helper, mapper, serializer, and constructor touched along the way.
+   Every node that is reachable (can be hit) must appear and be analyzed -- nothing skipped.
+   Nodes with no in-repo caller and not an entry point -> mark UNREACHABLE / dead with [DEAD].
+   External libraries are [EXTERNAL] terminals; do not walk into their internals.
+2. Dependency graph  -- nodes = files/modules, edges = imports.
+                       Circular dependency cycles highlighted with ASCII dashed edges + [!!] Circular badge.
+                       Dead exports (never imported in-repo) -> [DEAD] node.
+3. Complexity heatmap -- node size = LOC, risk label = [low] [medium] [high].
+                       God files (>300 LOC) and deeply nested functions (>4 levels) flagged [high].
+4. Architecture/layer map -- ONLY when a framework/arch is detected (see Architecture Detection).
+                       Group nodes by layer; flag business logic sitting in the wrong layer.
+```
 
-Tiebreakers: trace > review. Ambiguous + zero detectable entry points → ask one question.
+**Structural problem checklist (run inline as observations):**
+```txt
+[ ] Circular imports            [ ] God files (>300 LOC)
+[ ] Business logic in wrong layer   [ ] Missing error boundaries
+[ ] Dead exports                [ ] Deep nesting (>4 levels)
+```
+Plus the full pattern catalog below.
+
+**Completeness contract -- full edge coverage in ONE response:**
+```txt
+Cover ALL provided code in a single pass. Never stop at the first file/module/entry point.
+- From every entry point, follow EVERY in-repo edge until each branch reaches a terminal
+  (response / return / DB-file-cache write / emitted event-job-webhook-email / handled error).
+- Every reachable node (every piece of code that can be hit) must be analyzed and rendered --
+  no "continues to ...", no summarizing a branch whose code was provided.
+- The dependency graph includes every file and every import edge -- not a sample.
+- The complexity heatmap ranks every module.
+- If multiple entry points exist (routes, main, CLI, workers), walk all of them.
+- For conditional branches, cover both arms if both are reachable. For loops, one iteration
+  plus exit condition. For recursion, self-loop plus base case.
+Do NOT defer modules, entry points, or branches to a follow-up. Do NOT reply with a partial
+view plus an offer to "drill into the rest". A partial answer is a failed review.
+Only mark a node [PARTIAL]/[EXTERNAL] when the code for it was genuinely not provided.
 ```
 
 ---
 
-## TRACE MODE
+## Structural Problem Detection (run before rendering, evidence-based only)
 
-Given any starting point, draw the full directed path to final output. Level A default.
+Scan the symbol table for patterns. Flag a node/edge ONLY where a pattern is actually found.
+No pattern -> no annotation. State the pattern name explicitly on every flagged node.
 
-**Entry point types:** HTTP route, function call, file operation, event/webhook/cron, variable, expression, test action (`cy.request`, `page.goto`)
-
-**Node types:**
-```txt
-[ENTRY]      green   — execution start
-[ROUTER]     blue    — route matching / dispatch
-[MIDDLEWARE] amber   — auth, validation, rate limit, logging
-[CONTROLLER] blue    — request handler
-[SERVICE]    blue    — business logic
-[REPOSITORY] blue    — data access
-[DB/STORE]   gold    — database, cache, filesystem
-[EXTERNAL]   gold    — third-party API, queue, email
-[RESPONSE]   green   — final output
-[ERROR]      red     — exception / error response
-[PARTIAL]    dashed border — truncated file symbol
-[DYNAMIC]    dashed edge  — runtime dispatch target unknown
-```
-
-**Trace rules:**
-```txt
-1. Happy path always shown — solid edges, top to bottom
-2. Error/warning paths ONLY if anomaly pattern detected (see below)
-3. Every edge labeled with what moves (e.g. "{ email, password }", "User | null", "Error: 401")
-4. Data transform → ⊕ badge on node (never ⟳ — ⟳ is async only)
-5. Side effect → ★ badge on node
-6. Async boundary → ⟳ badge on node and edge (await, Promise, goroutine, callback, queue)
-7. Conditional branch → fork explicitly, label each arm with condition
-8. End node always explicit (res.json / return value / file written / event emitted)
-9. Zoom control [A][B][C][D][E] always visible in graph UI (TRACE MODE only)
-10. "Drill into" any node → expand to Level+1 (max 2 levels below active); "Collapse" to return
-```
-
-**End-to-end scan contract:**
-```txt
-Never stop at the first handler, controller, service, or repository.
-Trace reachable execution from the chosen entry point until every branch reaches a terminal node:
-  - [RESPONSE] HTTP response / rendered view / redirect / thrown error handled as response
-  - [DB/STORE] final file/cache/database write when the write is the output
-  - [EXTERNAL] emitted job/event/webhook/email when that emission is the output
-  - [RETURN] final function return when no higher-level caller is provided
-
-Traversal order:
-  1. Start at the topmost user-visible entry point: route/test action/main/CLI/event/file watcher.
-  2. Follow middleware/guards/validators before handler logic.
-  3. Follow every in-repo function/method call, constructor call, repository call, model method, and helper call.
-  4. Follow data shape changes through request DTOs, serializers/resources, mappers, response builders, and error formatters.
-  5. Follow side effects to DB/cache/files/queues/emails/webhooks; external internals stay [EXTERNAL].
-  6. For conditional branches, trace both arms if both are reachable from provided code.
-  7. For loops, summarize one iteration and show exit condition.
-  8. For recursion, draw a self-loop and state the base/stop condition if visible.
-
-If a call target is missing from provided code, create a [PARTIAL] or [EXTERNAL] terminal and continue tracing all other known branches.
-If multiple primary entry points exist, deep scan the highest-priority entry point first, then list the rest in Drill-Down.
-```
-
-**Deep scan default for multi-file input:**
-```txt
-Step 1 — Silent inventory (never output to user):
-          detect language, architecture, ALL entry points, external deps, terminal outputs
-
-Step 2 — IMMEDIATELY execute full TRACE MODE:
-          Priority: HTTP route > main()/index > CLI > event consumer > cron > other
-          One-line header only: "Tracing [entry_point] — [architecture detected]"
-          Then trace top-to-bottom ALL THE WAY to every reachable final output:
-            - every middleware, service, repository, DB call
-            - every in-repo helper/model/resource/serializer touched by the path
-            - every reachable branch until terminal node
-            - anomaly detection active throughout
-            - error/warning paths where patterns found
-            - do NOT stop mid-trace
-            - do NOT summarize with "continues to..." if code is available
-            - do NOT render architecture graph first
-            - do NOT ask which entry point — pick the most primary one
-
-Step 3 — After full trace, run problem detection INLINE as observations:
-          [ ] Circular imports         [ ] God files (>300 LOC)
-          [ ] Business logic in wrong layer  [ ] Missing error boundaries
-          [ ] Dead exports             [ ] Deep nesting (>4 levels)
-
-Step 4 — Drill-Down Offer listing ALL other detected entry points as trace options.
-```
-
-**Architecture graph is OPTIONAL — only render if user explicitly asks for it.**
-
----
-
-## Anomaly Detection (run before rendering, evidence-based only)
-
-Scan symbol table for patterns. Draw error/warning paths ONLY where a pattern is found.
-No pattern → no annotation. State pattern name explicitly on every flagged edge.
-
-**SECURITY + FATAL → 🔴 error path (╌╌ PATTERN_NAME ╌╌▶)**
+**SECURITY + FATAL -> [!!] node (named pattern)**
 ```txt
 SECURITY:
   SQL_INJECTION       raw user input into DB query, no parameterize/ORM
-  AUTH_BYPASS         route reachable without required auth middleware
+  AUTH_BYPASS         handler reachable without required auth guard
   EXPOSED_SECRET      API key / token hardcoded or passed to logger
-  UNVALIDATED_INPUT   req.body / args → service/DB with no schema check
+  UNVALIDATED_INPUT   req.body / args -> service/DB with no schema check
   IDOR                resource fetched by user-supplied ID, no ownership check
 
 FATAL:
   NIL_DEREF           nullable accessed before nil/null check
-  UNHANDLED_PROMISE   async call, no await AND no .catch() — silent crash
+  UNHANDLED_PROMISE   async call, no await AND no .catch() -- silent crash
   MISSING_RETURN      typed function has code path with no return value
-  DEADLOCK_RISK       mutex locked, no guaranteed unlock path / circular goroutine wait
+  DEADLOCK_RISK       mutex locked, no guaranteed unlock / circular goroutine wait
   INFINITE_LOOP       loop condition cannot become false given data in scope
 ```
 
-**WARNING → 🟡 inline annotation (~~▶ ⚠ PATTERN_NAME)**
+**WARNING -> [!] node annotation (named pattern)**
 ```txt
 NULL_UNGUARDED      returns T | null, consumer accesses without guard
 SWALLOWED_ERROR     error caught but not propagated or logged
 MISSING_AWAIT       async called without await, result is Promise<T> not T
-SHAPE_DRIFT         object transformed, downstream still accesses pre-transform fields
+SHAPE_DRIFT         object transformed, downstream still reads pre-transform fields
 TYPE_MISMATCH       upstream produces type X, downstream expects type Y
 KEY_MISMATCH        publish key and consumer listen key differ (typo / case / prefix)
 UNCLOSED_RESOURCE   DB connection / file handle opened, no close/defer path
 ```
 
+See `references/problem-pattern.md` for the full structural anti-pattern catalog and render rules.
+
 ---
 
 ## Architecture Detection
 
-Detect architecture pattern AND framework/stack before tracing. Apply labels to nodes automatically.
-Show in graph title: `Trace — NestJS Clean Arch`.
+Detect architecture pattern AND framework/stack to label and group nodes in the dependency/layer map.
+Show in graph title, e.g. `Review -- NestJS Clean Arch`. The arrows below are layer ordering for grouping, not execution traces.
 
 **Backend:**
 ```txt
-Laravel MVC    routes/web.php, routes/api.php, Http/Controllers/  → Route→Controller→Model→DB
-Express/Koa    router.get/post, app.use(), req/res params          → Router→Middleware→Handler→Response
-Fastify        fastify.register(), reply.send()                    → Plugin→Route→Handler→Reply
-NestJS         @Module @Controller @Injectable @InjectRepository   → Module→Controller→Service→Repo
-Django         urls.py, views.py, serializers.py, models.py       → URL→View→Serializer→Model→DB
-FastAPI        @app.get/post, Depends(), async def, SQLAlchemy     → Router→Endpoint→Dependency→DB
-Go net/http    http.HandleFunc, ServeHTTP                          → Mux→Handler→Service→DB
-Go Gin/Echo    gin.Default(), r.GET/POST, c.JSON()                 → Engine→RouteGroup→Handler→Response
-Rails          routes.rb, *_controller.rb, ApplicationRecord       → Route→Controller→Model→DB
-Spring Boot    @RestController @Service @Repository @Autowired     → Controller→Service→Repo→DB
-Generic MVC    controllers/, models/, views/ or *Controller.*      → Model/View/Controller
-Clean Arch     domain/, application/, infrastructure/ or *UseCase  → Entity→UseCase→Interface→Infra
-Hexagonal      ports/, adapters/, core/                            → Core→Port→Adapter
-Layered        services/, repositories/, handlers/                 → Presentation→Business→Data
+Laravel MVC    routes/web.php, routes/api.php, Http/Controllers/  -> Route/Controller/Model/DB
+Express/Koa    router.get/post, app.use(), req/res params          -> Router/Middleware/Handler
+Fastify        fastify.register(), reply.send()                    -> Plugin/Route/Handler
+NestJS         @Module @Controller @Injectable @InjectRepository   -> Module/Controller/Service/Repo
+Django         urls.py, views.py, serializers.py, models.py        -> URL/View/Serializer/Model/DB
+FastAPI        @app.get/post, Depends(), async def, SQLAlchemy     -> Router/Endpoint/Dependency/DB
+Go net/http    http.HandleFunc, ServeHTTP                          -> Mux/Handler/Service/DB
+Go Gin/Echo    gin.Default(), r.GET/POST, c.JSON()                 -> Engine/RouteGroup/Handler
+Rails          routes.rb, *_controller.rb, ApplicationRecord       -> Route/Controller/Model/DB
+Spring Boot    @RestController @Service @Repository @Autowired      -> Controller/Service/Repo/DB
+Generic MVC    controllers/, models/, views/ or *Controller.*      -> Model/View/Controller
+Clean Arch     domain/, application/, infrastructure/ or *UseCase  -> Entity/UseCase/Interface/Infra
+Hexagonal      ports/, adapters/, core/                            -> Core/Port/Adapter
+Layered        services/, repositories/, handlers/                 -> Presentation/Business/Data
 ```
 
 **Frontend:**
 ```txt
-Vanilla JS     addEventListener, querySelector — no framework      → DOMReady→EventListener→Handler→DOM
-jQuery         $(fn), .on(), $.ajax                                → DOMReady→.on()→callback→$.ajax→DOM
-Vue 2          new Vue(), export default { data(), methods:{} }    → created/mounted→method→data→render
-Vue 3          setup(), ref(), reactive(), onMounted()             → setup→ref→computed→template→DOM
-Nuxt.js        pages/, useAsyncData(), useFetch()                  → page→asyncData→store→component
-Svelte         .svelte, $: reactive, writable store                → onMount→$:→store.update→DOM
-SvelteKit      +page.svelte, +page.server.ts, load()              → load→fetch→render
-Angular        @NgModule @Component @Injectable, ngOnInit()        → Module→Component→Service→Template
-React          .jsx/.tsx, useState, useEffect                      → Component→state→effect→render
-Next.js        pages/api/, app/api/, route.ts                     → Page/APIRoute→ServerComp→fetch→Response
-Astro          .astro, ---frontmatter---, getStaticPaths()         → frontmatter→fetch→staticHTML
-Alpine.js      x-data, x-on, x-bind, x-model                     → x-data→x-on→method→DOM
-HTMX           hx-get/post, hx-trigger, hx-target, hx-swap       → trigger→hx-request→serverHTML→swap
+Vanilla JS  addEventListener, querySelector -- no framework   React     .jsx/.tsx, useState, useEffect
+jQuery      $(fn), .on(), $.ajax                              Next.js   pages/api/, app/api/, route.ts
+Vue 2/3     new Vue() / setup(), ref(), reactive()            Astro     .astro, ---frontmatter---
+Nuxt.js     pages/, useAsyncData(), useFetch()                Alpine.js x-data, x-on, x-bind, x-model
+Svelte(Kit) .svelte, $: reactive, +page.server.ts            HTMX      hx-get/post, hx-trigger, hx-swap
+Angular     @NgModule @Component @Injectable, ngOnInit()
 ```
 
 **Mobile:**
 ```txt
-React Native   .tsx + react-native, StyleSheet                     → Component→state→NativeBridge→UI
-Flutter        .dart, StatefulWidget, setState(), build()          → Widget→build→setState→render
-Kotlin Android .kt, ViewModel, LiveData/Flow                       → Activity→ViewModel→Repository→DB
-Swift iOS      .swift, viewDidLoad, URLSession                     → ViewController→Model→URLSession→UI
+React Native  .tsx + react-native      Flutter        .dart, StatefulWidget, build()
+Kotlin Android .kt, ViewModel, Flow    Swift iOS      .swift, viewDidLoad, URLSession
 ```
 
-**Tiebreaker:** framework-specific signals > generic folder naming > file naming convention > most matches > tied → "Layered (detected)"
-
-**Unknown fallback:** folder/file heuristics + import patterns → label `[INPUT]→[PROCESS]→[OUTPUT]`
-
----
-
-## TEST TRACE MODE
-
-Triggered by Cypress / Playwright files (`.cy.js`, `.cy.ts`, `.spec.*`, `.test.*`, `*.e2e.*`).
-
-```txt
-Entry point signals:
-  Cypress:    cy.visit() → GET, cy.request('POST') → POST, cy.intercept() → [MOCK]
-  Playwright: page.goto() → GET, page.request.post() → POST, page.route() → [MOCK]
-
-Node types: [DESCRIBE] [IT/TEST] [ACTION] [ASSERT](purple) [MOCK](dashed) [COVERAGE]
-
-Steps:
-  1. Extract all entry points from test file
-  2. For each: trace which route/handler it hits (if app code provided)
-     If no app code: render test flow only (describe→it→action→assert chain)
-  3. Coverage gap detection (if app code also provided):
-     → show routes/functions with NO test coverage (gray + ⚠️)
-     → overlay coverage on architecture layer graph
-
-Output: HTML artifact — test flow graph + coverage overlay if applicable + ASCII test map below
-```
-
----
-
-## REVIEW MODE
-
-Triggered by "review" / "complexity" / "dependencies". No zoom levels.
-
-```txt
-Graphs: Dependency graph (circular deps highlighted) + Complexity heatmap (size=LOC, color=complexity)
-Problems: same checklist as TRACE MODE deep scan Step 3
-Output: HTML artifact, nodes clickable, problem nodes red, dead code gray,
-        heatmap green→yellow→red; + static ASCII dependency map below
-```
+**Tiebreaker:** framework-specific signals > generic folder naming > file naming > most matches > tied -> `Layered (detected)`.
+**Unknown fallback:** folder/file heuristics + import patterns -> label modules `[INPUT]/[PROCESS]/[OUTPUT]`.
 
 ---
 
 ## Output Format
 
 ```txt
-1. Graph first, always — before any prose
-2. HTML artifact: plain HTML + inline SVG + vanilla JS (no framework)
-   - Nodes clickable → highlight connected path
-   - Hover tooltip → file path, LOC, function signature, layer
-   - "Trace from here" button on every node
-   - Zoom control [A][B][C][D][E] visible (TRACE MODE only)
-   - ASCII panel below, synced to active zoom level
-3. ASCII-only when: terminal/plain-text context, ≤8 nodes, or user asks
-4. Colors (consistent per session):
-   Entry/Response #3aaa8c  Internal #668db8  External/DB #F0A500
-   Error #e05252  Dead/Mock #888888  Middleware #c49a3c  Assert #9b59b6
-5. Legend always shown. Edge labels always visible (not hover-only).
+1. Graph first, always -- before any prose.
+2. ASCII ONLY. Render the full review in ASCII in every context -- terminal, chat, or agent.
+   Never generate HTML, SVG, JavaScript, interactive artifacts, clickable graphs, or visual
+   artifacts, even if the user explicitly asks for them. If asked for HTML/interactive output,
+   refuse that format briefly and provide the ASCII graph instead.
+3. Render in this order: reachability/edge graph, dependency graph, complexity heatmap,
+   architecture/layer map when detected, then problems and observations.
+4. Severity is shown with ASCII badges only ([!!] fatal, [!] warning, [DEAD] dead, [OK] safe).
+   No colors, no Unicode box-drawing, no emoji -- 7-bit ASCII characters only.
 ```
 
 ---
 
-## ASCII Flowchart (mandatory with every trace)
+## ASCII Reachability Map (the default primary output)
 
-Portable, copy-pasteable companion to the interactive graph. Not optional.
+This is the main deliverable, not a companion. Render the FULL review here in ASCII: every entry
+point traced through every edge to its terminal, every reachable node shown, problems flagged inline.
 
-**Symbols:**
+**Symbols (pure ASCII only -- never use Unicode box-drawing or emoji):**
 ```txt
-Direction:  │ ▼ ▶ ─ ┌┐└┘ ├┤┬┴┼
-Paths:      ───  happy path     ╌╌╌  SECURITY/FATAL error (+ pattern name)
-            ~~~  WARNING         ─ ─  return / response
-Badges:     ★ side-effect  ⟳ async  ? branch  ⊕ transform  ⚠ warning anomaly
-Edge label: inline between nodes  e.g. │ { email, password }  or  ╌╌ NIL_DEREF ╌╌▶
+Edges:   -->  call / depends on        <-O->  circular dependency
+Flow:    |  vertical edge    v  arrowhead    + - corners & connectors    label = data passed
+Badges:  [!!] security/fatal   [!] warning   * side-effect   (+) god file (>300 LOC)   [DEAD] dead/unreachable   [OK] safe
+Nodes:   [RESPONSE] terminal   [EXTERNAL] third-party   [PARTIAL] code not provided
 ```
 
-**Structure (Level A):**
+**Structure -- boxed, entry at top, terminal at bottom, one lane per entry point:**
 ```
-[ENTRY: trigger]
-        │
-        ▼ { edge label }
-┌───────────────────────┐
-│  FunctionName()       │ [badges]
-└──────────┬────────────┘
-           │              ╌╌ PATTERN ╌╌╌╌╌╌╌╌╌▶ [ERROR: description]
-           ▼ { return }   ~~ PATTERN ~~~~~~~~~~▶ ⚠ warning annotation
-┌───────────────────────┐
-│  NextFunction()       │ [badges]
-└──────────┬────────────┘
-           ▼
-     [RESPONSE: final output]
-Legend: ─── happy path  ╌╌╌ security/fatal  ~~~ warning  ─ ─ return  ★ side-effect  ⟳ async  ⊕ transform  ⚠ anomaly
+  ENTRY /login          ENTRY /users/:id --auth-->    ENTRY /admin/reset [!!] AUTH_BYPASS
+       | {email,pwd}          | id                          |
+       v                      v                            v
+ +--------------+      +--------------+             +--------------+
+ | controller   |      | controller   |             | controller   |
+ +------+-------+      +------+-------+             +------+-------+
+        v                    v                            v
+ +--------------+<-O->+--------------+             +--------------+
+ | service *    |     | service [!]  |             | service      |
+ +------+-------+     +------+-------+             +------+-------+
+        +-------------------+--------------------------+
+                            v
+              +-----------------------------+
+              | repository [!!] SQL_INJECTION |
+              +--------------+--------------+
+                             v
+                      [EXTERNAL: db]  -->  [RESPONSE]
+
+ DISCONNECTED:  utils.legacyFormat()  [DEAD] UNREACHABLE -- no caller, not an entry point
+
+ Legend: --> call  <-O-> circular  * side-effect  [!] warning  [!!] security  [DEAD] dead  label = data
 ```
 
 **ASCII rules:**
 ```txt
-- All boxes in same column → same width (pad with spaces)
-- Error/warning paths → RIGHT side with ╌╌▶ / ~~▶ + pattern name
-- Conditional fork → BOTH arms labeled with condition; rejoin or terminate separately
-- Side effects → ├─ ★ sideEffect() ─▶ [EXTERNAL]
-- Return paths → ─ ─ ─ label inline
-- Legend always at bottom
-- Syncs to active zoom level in interactive graph (TRACE MODE only)
+- One lane (vertical column) per entry point; trace each lane top->terminal. Lanes may merge at shared nodes.
+- Every reachable node appears in a box. Nothing summarized as "continues to ..." if code was provided.
+- Label edges with the data that moves. Flag nodes inline with badge + named pattern.
+- Circular deps -> <-O-> between the two nodes. Dead/unreachable nodes listed under DISCONNECTED with [DEAD].
+- Terminals explicit: [RESPONSE] / [EXTERNAL] / final write. Legend always at bottom.
+- Boxes in the same column share width (pad with spaces). Keep it copy-paste clean.
 ```
 
 ---
@@ -349,44 +269,44 @@ Legend: ─── happy path  ╌╌╌ security/fatal  ~~~ warning  ─ ─ ret
 ## Observation Format (below graph)
 
 ```txt
-✅ [Strong point]                    max 2
-⚠️  [Warning — PATTERN_NAME: detail]  one per WARNING found, max 3
-🔴 [Security/Fatal — PATTERN_NAME]   one per SECURITY/FATAL found
+[OK] [Strong point]                     max 2
+[!]  [Warning -- PATTERN_NAME: detail]   one per WARNING found, max 3
+[!!] [Security/Fatal -- PATTERN_NAME]    one per SECURITY/FATAL found
 ```
-Max 6 bullets. No paragraphs. Zero anomalies → omit 🔴/⚠️ entirely.
+Max 6 bullets. No paragraphs. Zero problems found -> omit [!!]/[!] entirely.
 
 ---
 
-## Drill-Down Offer (end of every response)
+## Ending the response -- STOP after observations
 
+By the completeness contract, the review already covers the entire codebase. There is nothing
+left to defer, so there is nothing to offer.
+
+After the graph(s), the ASCII map, and the observation bullets: **STOP. End the response.**
+
+Do NOT append any of the following -- they all imply the review was partial, which it is not:
 ```txt
-TRACE:    A) Zoom Level B — per statement in [node]
-          B) Error/warning detail at [flagged node]
-          C) Trace another entry point: [list]
-          D) Switch to REVIEW MODE
-
-TEST:     A) Trace app code hit by [test]
-          B) Coverage gaps — untested routes/functions
-          C) Drill into mock boundary [MOCK]
-
-REVIEW:   A) Trace flow from [entry point]
-          B) Detail problem node: [list]
-          C) View circular dependency chain
+x a drill-down menu (A/B/C/D options)
+x "want me to go deeper / drill into X?"
+x a list of other entry points / modules "to trace next"
+x "switch to ... mode" / "I can also ..."
+x any closing question that offers further analysis
 ```
+If the user wants more, they will ask. The correct ending is the last observation bullet.
 
 ---
 
 ## Quick Checklist
 
 ```txt
-MENTAL MODEL       symbol table built? partials marked? externals marked? dynamic edges dashed?
-ANOMALY DETECTION  all 3 phases scanned? error paths only where pattern found? pattern named on edge?
-MODE               correct mode selected? architecture detected and labeled?
-GRAPH              graph rendered first? zoom control visible (TRACE only)? happy path solid top-to-bottom?
-                   badges ★⟳⊕⚠ correct? edge labels present? legend shown?
-                   deep scan: silent inventory? immediate trace? entry point stated in one line?
-ASCII              present for every trace? error RIGHT with ╌╌▶+pattern? warning RIGHT with ~~▶+pattern?
-                   happy path center │▼┌─┐? forks both arms labeled? side-effects as ├─★? legend at bottom?
-OBSERVATIONS       ✅ max 2, ⚠️ max 3, 🔴 per pattern. zero anomalies → omit 🔴/⚠️.
-DRILL-DOWN         offer at end, tailored to active mode?
+MENTAL MODEL   symbol table built? partials marked? externals marked? dynamic edges dashed?
+PROBLEMS       all patterns scanned? flagged ONLY where evidence found? pattern named on node?
+ARCHITECTURE   framework/arch detected and labeled? nodes grouped by layer?
+GRAPH          ASCII reachability graph rendered first? NO HTML/SVG/JS ever? lanes per entry point?
+               circular deps badged [!!]? dead code badged [DEAD]? legend shown? edge labels visible?
+ASCII          one lane per entry point? every reachable node boxed? terminals explicit? legend at bottom?
+OBSERVATIONS   [OK] max 2, [!] max 3, [!!] per pattern. zero problems -> omit [!!]/[!].
+COMPLETENESS   ALL files/modules/entry points covered in one pass? nothing deferred to follow-up?
+EDGE COVERAGE  every edge followed? every reachable node hit & analyzed? unreachable flagged dead?
+ENDING         response stops after observations? NO drill-down menu, offers, or follow-up questions?
 ```
