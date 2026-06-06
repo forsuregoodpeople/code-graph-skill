@@ -11,7 +11,9 @@ description: >
   its structure end-to-end: "review my code", "analyze codebase", "show dependencies",
   "map the modules", "where is the complexity", "find structural problems", "what
   touches this", "end-to-end analysis", "is this well organized", "architecture
-  review", "dependency graph", "complexity heatmap". Always output an ASCII graph first.
+  review", "dependency graph", "complexity heatmap", "request/response shape",
+  "payload flow", "data contract", "where does this field come from", "what shape
+  comes back", "is a field leaking". Always output an ASCII graph first.
   Never explain structure in prose alone.
 ---
 
@@ -83,12 +85,23 @@ Always review. Given any code, file, or folder, render the structure as graphs -
    Every node that is reachable (can be hit) must appear and be analyzed -- nothing skipped.
    Nodes with no in-repo caller and not an entry point -> mark UNREACHABLE / dead with [DEAD].
    External libraries are [EXTERNAL] terminals; do not walk into their internals.
-2. Dependency graph  -- nodes = files/modules, edges = imports.
+2. Payload / Contract Flow -- one payload column per ROUTE/handler/command/consumer
+                       (NOT per binary/process), from the request shape at the entry to the
+                       response shape at the terminal. Payload lives at route altitude: if graph 1
+                       grouped many routes under one coarse node (e.g. "the API binary"), drill
+                       down here and enumerate the concrete routes (METHOD + path) with their
+                       shapes -- never collapse payloads to the process level. At each hop show the
+                       field-level DIFF: +field (added)  -field (dropped)  ~old->new (renamed)
+                       field: T1=>T2 (retyped)  [SENSITIVE] (secret field). Flag sensitive
+                       fields that survive to the response, request bodies persisted without a
+                       whitelist, payloads consumed without schema validation, and responses that
+                       diverge from the declared DTO/return type. See `references/payload-flow.md`.
+3. Dependency graph  -- nodes = files/modules, edges = imports.
                        Circular dependency cycles highlighted with ASCII dashed edges + [!!] Circular badge.
                        Dead exports (never imported in-repo) -> [DEAD] node.
-3. Complexity heatmap -- node size = LOC, risk label = [low] [medium] [high].
+4. Complexity heatmap -- node size = LOC, risk label = [low] [medium] [high].
                        God files (>300 LOC) and deeply nested functions (>4 levels) flagged [high].
-4. Architecture/layer map -- ONLY when a framework/arch is detected (see Architecture Detection).
+5. Architecture/layer map -- ONLY when a framework/arch is detected (see Architecture Detection).
                        Group nodes by layer; flag business logic sitting in the wrong layer.
 ```
 
@@ -97,6 +110,8 @@ Always review. Given any code, file, or folder, render the structure as graphs -
 [ ] Circular imports            [ ] God files (>300 LOC)
 [ ] Business logic in wrong layer   [ ] Missing error boundaries
 [ ] Dead exports                [ ] Deep nesting (>4 levels)
+[ ] Leaked field in response    [ ] Over-posting / mass-assign
+[ ] Contract break (resp vs DTO)    [ ] Unvalidated payload
 ```
 Plus the full pattern catalog below.
 
@@ -132,6 +147,8 @@ SECURITY:
   EXPOSED_SECRET      API key / token hardcoded or passed to logger
   UNVALIDATED_INPUT   req.body / args -> service/DB with no schema check
   IDOR                resource fetched by user-supplied ID, no ownership check
+  LEAKED_FIELD        sensitive field (password/*hash/token/secret) survives to response payload
+  OVERPOSTING         whole req.body persisted with no whitelist -- privileged field can be set
 
 FATAL:
   NIL_DEREF           nullable accessed before nil/null check
@@ -150,6 +167,8 @@ SHAPE_DRIFT         object transformed, downstream still reads pre-transform fie
 TYPE_MISMATCH       upstream produces type X, downstream expects type Y
 KEY_MISMATCH        publish key and consumer listen key differ (typo / case / prefix)
 UNCLOSED_RESOURCE   DB connection / file handle opened, no close/defer path
+CONTRACT_BREAK      response shape != declared DTO/return type (missing/extra/typo field)
+UNVALIDATED_PAYLOAD payload consumed/persisted with no schema validation (shape-level)
 ```
 
 See `references/problem-pattern.md` for the full structural anti-pattern catalog and render rules.
@@ -208,8 +227,8 @@ Kotlin Android .kt, ViewModel, Flow    Swift iOS      .swift, viewDidLoad, URLSe
    Never generate HTML, SVG, JavaScript, interactive artifacts, clickable graphs, or visual
    artifacts, even if the user explicitly asks for them. If asked for HTML/interactive output,
    refuse that format briefly and provide the ASCII graph instead.
-3. Render in this order: reachability/edge graph, dependency graph, complexity heatmap,
-   architecture/layer map when detected, then problems and observations.
+3. Render in this order: reachability/edge graph, payload/contract flow, dependency graph,
+   complexity heatmap, architecture/layer map when detected, then problems and observations.
 4. Severity is shown with ASCII badges only ([!!] fatal, [!] warning, [DEAD] dead, [OK] safe).
    No colors, no Unicode box-drawing, no emoji -- 7-bit ASCII characters only.
 ```
@@ -304,6 +323,8 @@ PROBLEMS       all patterns scanned? flagged ONLY where evidence found? pattern 
 ARCHITECTURE   framework/arch detected and labeled? nodes grouped by layer?
 GRAPH          ASCII reachability graph rendered first? NO HTML/SVG/JS ever? lanes per entry point?
                circular deps badged [!!]? dead code badged [DEAD]? legend shown? edge labels visible?
+PAYLOAD        payload/contract flow rendered per entry? field diffs per hop (+/-/~/T1=>T2)?
+               sensitive fields tagged? LEAKED_FIELD / OVERPOSTING / CONTRACT_BREAK / UNVALIDATED_PAYLOAD flagged on evidence?
 ASCII          one lane per entry point? every reachable node boxed? terminals explicit? legend at bottom?
 OBSERVATIONS   [OK] max 2, [!] max 3, [!!] per pattern. zero problems -> omit [!!]/[!].
 COMPLETENESS   ALL files/modules/entry points covered in one pass? nothing deferred to follow-up?
