@@ -9,12 +9,13 @@ Code Graph Skill turns compatible AI coding assistants into visual code reviewer
 It prioritizes graph-first output: directed execution traces, ASCII flowcharts, dependency maps, zoomable symbol views, and concise findings.
 
 - **Execution tracing** — request/data/function flow from entry point to final output
+- **Payload / contract flow** — request shape traced field-by-field to the response, with per-hop diffs (added/dropped/renamed/retyped fields)
 - **Graph-first review** — visual graph before prose explanation
 - **5 zoom levels** — Function → Statement → Expression → Variable → Property
 - **Happy + error paths** — shows normal flow and failure branches together
 - **Architecture review** — dependency graphs, module maps, complexity hotspots
 - **Test tracing** — supports Cypress and Playwright files as trace entry points
-- **Problem detection** — circular dependencies, god files, dead exports, deep nesting, async error risk
+- **Problem detection** — circular dependencies, god files, dead exports, deep nesting, async error risk, plus data-contract issues: leaked fields, over-posting/mass-assignment, contract breaks, unvalidated payloads
 
 ## Installation
 
@@ -53,6 +54,7 @@ Expected structure:
 └── references/
     ├── mental-model.md
     ├── trace-rendering.md
+    ├── payload-flow.md
     └── problem-pattern.md
 ```
 
@@ -66,6 +68,7 @@ Copy `SKILL.md` and `references/` to your Claude Code skills folder:
 └── references/
     ├── mental-model.md
     ├── trace-rendering.md
+    ├── payload-flow.md
     └── problem-pattern.md
 ```
 
@@ -175,6 +178,7 @@ Badges:
 ├── references/
 │   ├── mental-model.md            # Symbol table schema and zoom rules
 │   ├── trace-rendering.md         # Execution graph rendering rules
+│   ├── payload-flow.md            # Payload / contract flow rendering rules
 │   └── problem-pattern.md         # Structural anti-pattern catalog
 ```
 
@@ -182,6 +186,7 @@ Badges:
 
 - **mental-model.md** — Symbol table schema, zoom levels, graph build rules, and extraction model
 - **trace-rendering.md** — Happy/error path rendering, edge labels, node badges, Mermaid/ASCII rules
+- **payload-flow.md** — Request->response payload rendering, per-hop field diffs, request-shape sources per stack, leaked-field / over-posting / contract-break / unvalidated-payload detection
 - **problem-pattern.md** — Circular dependency, god file, deep nesting, dead export, async risk, fan-in/fan-out rules
 
 ## Key rules

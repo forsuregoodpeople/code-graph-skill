@@ -76,6 +76,54 @@ Badge:   [i] Core module (N dependents)
 Impact:  Any change here ripples everywhere -- treat as infrastructure
 ```
 
+### 9. Leaked Field in Response
+```
+Pattern: Sensitive field reaches the response payload
+Signal:  Field named password / *hash / token / secret / apiKey / ssn / card / *_key
+         present in response shape, OR full entity returned with no select/pick/serializer
+         that strips secrets
+Render:  [RESPONSE] node tagged [!!]; name the leaked field(s)
+Badge:   [!!] LEAKED_FIELD (field)
+Impact:  Credential/PII exposure over the wire and in logs/caches
+```
+
+### 10. Over-Posting / Mass-Assignment
+```
+Pattern: Whole request body persisted without a field whitelist
+Signal:  req.body / input object spread or passed intact into create/save/insert/update,
+         no pick/only/permit/DTO field list; privileged fields (isAdmin, role, ownerId,
+         verified) can be set by the client
+Render:  [PERSIST]/[SERVICE] node tagged [!!]; name the privileged field at risk
+Badge:   [!!] OVERPOSTING (field)
+Impact:  Privilege escalation, tampering with server-controlled fields
+```
+
+### 11. Contract Break
+```
+Pattern: Response shape does not match the declared DTO / return type / API contract
+Signal:  [RESPONSE] shape has missing, extra, typo'd, or differently-typed fields vs the
+         declared interface / DTO / struct json tags / OpenAPI schema
+Render:  [RESPONSE] node tagged [!]; show declared vs actual
+Badge:   [!] CONTRACT_BREAK (declared vs actual)
+Impact:  Client breakage, silent integration drift, undocumented fields
+```
+
+### 12. Unvalidated Payload
+```
+Pattern: Payload consumed or persisted with no schema validation (shape level)
+Signal:  No schema validator (zod/joi/yup/class-validator), Pydantic model, FormRequest
+         rules, strong-params permit, or struct validate before the payload is used
+Render:  [REQUEST] or first consuming node tagged [!]
+Badge:   [!] UNVALIDATED_PAYLOAD
+Impact:  Garbage/hostile data into business logic and storage; sharpens UNVALIDATED_INPUT
+         to the payload-shape level
+```
+
+Relation to existing patterns (not duplicates): SHAPE_DRIFT = downstream reads
+pre-transform fields; TYPE_MISMATCH = producer type != consumer type (shows as `T1=>T2`
+on a hop); KEY_MISMATCH = event/queue publish vs listen key. The four above are the
+request/response HTTP contract lens. See `references/payload-flow.md` for render rules.
+
 ---
 
 ## Severity Scale

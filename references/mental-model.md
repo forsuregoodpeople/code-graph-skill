@@ -83,6 +83,45 @@ yang dipakai Code Graph skill sebelum render graph apapun.
 }
 ```
 
+### PayloadSymbol  (one per entry point -- drives Payload / Contract Flow graph)
+```txt
+{
+  entry:          string         // entry point id, e.g. "POST /users"
+  request_shape:  {              // where the inbound shape comes from
+    body:    string?             // ~{ name, email, password } or ~unknown
+    query:   string?
+    params:  string?
+    headers: string?
+  }
+  validated:      boolean        // true if a schema validator/DTO/permit guards it
+  hops:           PayloadHop[]   // shape at each hop, in order, to the terminal
+  response_shape: string?        // actual shape at [RESPONSE]
+  declared_response_type: string? // DTO/interface/struct the response claims to be
+  sensitive_fields: string[]     // fields matching password/*hash/token/secret/ssn/card/*_key
+}
+```
+
+### PayloadHop
+```txt
+{
+  node:    string                // node id this shape exists at (controller/service/persist/response)
+  shape:   string                // shape here, ~unknown if not visible
+  diff:    {                     // change vs previous hop
+    added:   string[]            // +field
+    dropped: string[]            // -field
+    renamed: string[]            // ~old->new
+    retyped: string[]            // field: T1=>T2
+  }
+  is_persist:  boolean           // hop writes to DB/store (drives OVERPOSTING check)
+  is_response: boolean           // terminal response hop (drives LEAKED_FIELD / CONTRACT_BREAK)
+}
+```
+
+**Payload shape extraction (where the initial shape + validation come from per stack)**
+is tabulated in `references/payload-flow.md` (Express req.body, NestJS DTO/@Body, FastAPI
+Pydantic, Laravel FormRequest, Go json.Decode struct, Rails strong params, ...). Build
+`request_shape` and `validated` from those signals; never fabricate fields not in the code.
+
 ### VariableSymbol
 ```txt
 {
