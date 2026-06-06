@@ -1,6 +1,6 @@
 # Trace Rendering Reference
 
-Detail rules untuk render execution trace graph di Code Graph skill.
+Detailed rules for rendering the execution trace graph in the Code Graph skill.
 
 ---
 
