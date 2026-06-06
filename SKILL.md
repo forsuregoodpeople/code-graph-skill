@@ -90,7 +90,9 @@ Always review. Given any code, file, or folder, render the structure as graphs -
                        response shape at the terminal. Payload lives at route altitude: if graph 1
                        grouped many routes under one coarse node (e.g. "the API binary"), drill
                        down here and enumerate the concrete routes (METHOD + path) with their
-                       shapes -- never collapse payloads to the process level. At each hop show the
+                       shapes -- never collapse payloads to the process level. Every node names the
+                       concrete TARGET FUNCTION that receives the payload (qualified name + file:line),
+                       not just a layer like "service"/"repo". At each hop show the
                        field-level DIFF: +field (added)  -field (dropped)  ~old->new (renamed)
                        field: T1=>T2 (retyped)  [SENSITIVE] (secret field). Flag sensitive
                        fields that survive to the response, request bodies persisted without a
@@ -323,8 +325,9 @@ PROBLEMS       all patterns scanned? flagged ONLY where evidence found? pattern 
 ARCHITECTURE   framework/arch detected and labeled? nodes grouped by layer?
 GRAPH          ASCII reachability graph rendered first? NO HTML/SVG/JS ever? lanes per entry point?
                circular deps badged [!!]? dead code badged [DEAD]? legend shown? edge labels visible?
-PAYLOAD        payload/contract flow rendered per entry? field diffs per hop (+/-/~/T1=>T2)?
-               sensitive fields tagged? LEAKED_FIELD / OVERPOSTING / CONTRACT_BREAK / UNVALIDATED_PAYLOAD flagged on evidence?
+PAYLOAD        payload/contract flow rendered per ROUTE (not per binary)? every node names target fn + file:line?
+               field diffs per hop (+/-/~/T1=>T2)? sensitive fields tagged?
+               LEAKED_FIELD / OVERPOSTING / CONTRACT_BREAK / UNVALIDATED_PAYLOAD flagged on evidence?
 ASCII          one lane per entry point? every reachable node boxed? terminals explicit? legend at bottom?
 OBSERVATIONS   [OK] max 2, [!] max 3, [!!] per pattern. zero problems -> omit [!!]/[!].
 COMPLETENESS   ALL files/modules/entry points covered in one pass? nothing deferred to follow-up?

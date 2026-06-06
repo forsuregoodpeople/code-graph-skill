@@ -1,7 +1,7 @@
 # Mental Model Reference
 
-Detail schema dan rendering rules untuk Phase 0 (internal symbol table)
-yang dipakai Code Graph skill sebelum render graph apapun.
+Detailed schema and rendering rules for Phase 0 (internal symbol table)
+used by the Code Graph skill before rendering any graph.
 
 ---
 
